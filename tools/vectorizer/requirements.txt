@@ -1,0 +1,7 @@
+numpy
+Pillow
+scipy
+scikit-image
+matplotlib
+cairosvg
+PyYAML

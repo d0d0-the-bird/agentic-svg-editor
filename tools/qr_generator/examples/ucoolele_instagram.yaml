@@ -1,0 +1,26 @@
+value: "https://instagram.com/ucoolele.hr"
+error_correction: H
+quiet_zone: 4
+module_size: 12
+modules:
+  shape: rounded
+  scale: 0.86
+  color: "#202124"
+  radius: 0.32
+eyes:
+  frame_shape: rounded
+  pupil_shape: circle
+  color: "#F58220"
+  pupil_color: "#F58220"
+  radius: 0.28
+background:
+  color: "#FFFFFF"
+logo:
+  enabled: false
+  path: null
+  scale: 0.18
+  knockout: true
+  padding_modules: 0.65
+  radius_modules: 0.8
+output:
+  validate: true

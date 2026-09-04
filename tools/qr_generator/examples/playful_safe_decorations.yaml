@@ -1,0 +1,60 @@
+value: "https://example.com"
+error_correction: H
+quiet_zone: 5
+module_size: 12
+modules:
+  shape: rounded
+  secondary_shape: capsule_h
+  pattern: diagonal
+  scale: 0.92
+  color: "#5B21B6"
+  secondary_color: "#D84315"
+  radius: 0.30
+  gradient:
+    enabled: true
+    type: linear
+    from: "#5B21B6"
+    to: "#D84315"
+    angle: 35
+eyes:
+  frame_shape: rounded
+  pupil_shape: circle
+  color: "#5B21B6"
+  pupil_color: "#F58220"
+  radius: 0.28
+background:
+  color: "#FFFFFF"
+logo:
+  enabled: false
+  path: null
+  scale: 0.08
+  knockout: true
+  padding_modules: 0.20
+  radius_modules: 0.8
+  badge_enabled: false
+  badge_shape: circle
+  badge_color: "#FFFFFF"
+  badge_stroke_color: "#5B21B6"
+  badge_stroke_width_modules: 0.04
+  badge_padding_modules: 0.30
+  badge_radius_modules: 1.0
+decorations:
+  enabled: true
+  seed: 7
+  edge_dots:
+    enabled: true
+    count: 8
+    colors: ["#5B21B6", "#F58220"]
+    size_modules: 0.28
+  sparkles:
+    enabled: true
+    count: 4
+    colors: ["#F58220"]
+    size_modules: 0.42
+  logo_halo:
+    enabled: false
+    color: "#F58220"
+    opacity: 0.14
+    padding_modules: 0.60
+output:
+  validate: true

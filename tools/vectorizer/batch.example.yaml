@@ -1,0 +1,16 @@
+output_dir: vectorized
+
+defaults:
+  line_error_px: 0.25
+  bezier_error_px: 0.75
+  min_contour_length: 8
+  max_contours: 0
+  blur_sigma: 0.42
+  normal_sample_distance: 1.5
+
+assets:
+  - name: megaphone
+    input: ../../examples/megaphone/input.png
+    max_contours: 5
+    fill: "#F28C00"
+    notes: Keep the five meaningful megaphone contours.

@@ -1,0 +1,448 @@
+schema_version: 1
+summary: Canonical QR generator config. No presets; every visual choice is explicit.
+fields:
+  value:
+    type: string
+    required: true
+    description: URL or text encoded by the QR.
+  error_correction:
+    type: enum
+    values: [L, M, Q, H]
+    default: H
+  quiet_zone:
+    type: integer
+    default: 4
+    min: 0
+  module_size:
+    type: integer
+    default: 12
+    min: 2
+  modules:
+    shape:
+      type: enum
+      values: [square, rounded, circle, diamond, squircle, star, petal, soft_blob, capsule_h, capsule_v]
+      default: rounded
+    secondary_shape:
+      type: enum_or_null
+      values: [square, rounded, circle, diamond, squircle, star, petal, soft_blob, capsule_h, capsule_v]
+      default: null
+    pattern:
+      type: enum
+      values: [uniform, checker, diagonal, rings]
+      default: uniform
+    scale:
+      type: number
+      default: 0.86
+      min: 0.35
+      max: 1.0
+    radius:
+      type: number
+      default: 0.32
+      min: 0.0
+      max: 0.5
+    color:
+      type: color
+      default: "#111111"
+    secondary_color:
+      type: color_or_null
+      default: null
+    gradient:
+      enabled:
+        type: boolean
+        default: false
+      type:
+        type: enum
+        values: [linear, radial]
+        default: linear
+      from:
+        type: color_or_null
+        default: null
+      to:
+        type: color_or_null
+        default: null
+      angle:
+        type: number
+        default: 45
+      mode:
+        type: enum
+        values: [sampled, continuous]
+        default: sampled
+        description: sampled assigns one position-derived color per module; continuous uses one user-space SVG gradient across all modules and bridges.
+      stops:
+        type: color_list_or_null
+        default: null
+        description: Optional multi-stop gradient colors; positions are distributed evenly.
+    accents:
+      enabled:
+        type: boolean
+        default: false
+        description: Deterministically recolor and reshape a sparse subset of dark data modules.
+      seed:
+        type: integer
+        default: 1
+      probability:
+        type: number
+        default: 0.0
+        min: 0.0
+        max: 1.0
+      colors:
+        type: color_list
+        default: ["#25F4EE", "#FE2C55"]
+      shapes:
+        type: shape_list
+        default: [circle]
+        description: Shapes are selected deterministically from this list; repeat entries to weight them.
+      scale:
+        type: number_or_null
+        default: null
+        min: 0.35
+        max: 1.0
+    connectivity:
+      enabled:
+        type: boolean
+        default: false
+        description: Turn on neighborhood-aware module joining.
+      horizontal_merge:
+        type: number
+        default: 0.85
+        min: 0.0
+        max: 1.0
+        description: Strength of horizontal bridges and horizontal run capsules.
+      vertical_merge:
+        type: number
+        default: 0.80
+        min: 0.0
+        max: 1.0
+        description: Strength of vertical bridges and vertical run capsules.
+      corner_merge:
+        type: number
+        default: 0.35
+        min: 0.0
+        max: 1.0
+        description: Softens L-corners and dense clusters by filling inner corners.
+      max_run:
+        type: integer
+        default: 4
+        min: 2
+        description: Maximum straight run length collapsed into one pill/bar.
+      connector_overlap:
+        type: number
+        default: 0.18
+        min: 0.0
+        max: 0.45
+        description: Legacy overlap control. Used as fallback when bridge.overlap is omitted.
+      selection:
+        seed:
+          type: integer
+          default: 1
+          description: Deterministic seed controlling which eligible neighbors connect.
+        horizontal_probability:
+          type: number
+          default: 1.0
+          min: 0.0
+          max: 1.0
+        vertical_probability:
+          type: number
+          default: 1.0
+          min: 0.0
+          max: 1.0
+        run_probability:
+          type: number
+          default: 1.0
+          min: 0.0
+          max: 1.0
+          description: Probability that an eligible straight run is collapsed into one long bar.
+      bridge:
+        style:
+          type: enum
+          values: [full, waisted]
+          default: waisted
+          description: Bridge shape drawn underneath neighboring modules.
+        max_thickness:
+          type: number
+          default: 0.62
+          min: 0.10
+          max: 1.20
+          description: Maximum bridge thickness as a fraction of the module draw size.
+        waist_ratio:
+          type: number
+          default: 0.55
+          min: 0.10
+          max: 1.0
+          description: Middle thickness divided by max_thickness. 1.0 keeps a full bridge.
+        overlap:
+          type: number
+          default: 0.14
+          min: 0.0
+          max: 0.45
+          description: How far the bridge extends underneath each neighboring module.
+        curve:
+          type: number
+          default: 0.65
+          min: 0.0
+          max: 1.0
+          description: Softness of the width transition from ends to middle.
+        connect_mixed_styles:
+          type: boolean
+          default: false
+          description: Allow bridges even when neighboring modules use different shape/accent styles. Bridge color is blended between the two modules.
+      corner_fillers:
+        enabled:
+          type: boolean
+          default: false
+          description: Add small interior filler shapes at dense 2x2 / L-shaped corners. Turn off for cleaner bridge-only interconnection.
+  eyes:
+    frame_shape:
+      type: enum
+      values: [square, rounded, circle, diamond, squircle]
+      default: rounded
+    pupil_shape:
+      type: enum
+      values: [square, rounded, circle, diamond, squircle]
+      default: circle
+    color:
+      type: color
+      default: "#111111"
+    pupil_color:
+      type: color_or_null
+      default: null
+    radius:
+      type: number
+      default: 0.28
+      min: 0.0
+      max: 0.5
+      description: Legacy fallback finder rounding amount. Used when per-layer radii are omitted.
+    frame_radius:
+      type: number_or_null
+      default: null
+      min: 0.0
+      max: 0.5
+      description: Outer finder-frame roundness. Falls back to radius when null.
+    inner_radius:
+      type: number_or_null
+      default: null
+      min: 0.0
+      max: 0.5
+      description: Inner white finder cutout roundness. Falls back to radius when null.
+    pupil_radius:
+      type: number_or_null
+      default: null
+      min: 0.0
+      max: 0.5
+      description: Finder pupil roundness. Falls back to radius when null.
+    radius_mode:
+      type: enum
+      values: [module, layer]
+      default: module
+      description: module preserves conservative QR-like rounding; layer applies radius as a fraction of each finder layer size.
+    gradient:
+      enabled:
+        type: boolean
+        default: false
+      type:
+        type: enum
+        values: [linear, radial]
+        default: linear
+      from:
+        type: color_or_null
+        default: null
+      to:
+        type: color_or_null
+        default: null
+      stops:
+        type: color_list_or_null
+        default: null
+      angle:
+        type: number
+        default: 45
+      mode:
+        type: enum
+        values: [local, continuous]
+        default: local
+        description: local restarts the gradient inside each finder marker; continuous spans the complete QR canvas.
+    instances:
+      description: Optional per-finder overrides. Keys are top_left, top_right, bottom_left.
+      top_left:
+        pupil_color: {type: color_or_null}
+        color: {type: color_or_null}
+        frame_radius: {type: number_or_null, min: 0.0, max: 0.5}
+        inner_radius: {type: number_or_null, min: 0.0, max: 0.5}
+        pupil_radius: {type: number_or_null, min: 0.0, max: 0.5}
+      top_right:
+        pupil_color: {type: color_or_null}
+        color: {type: color_or_null}
+        frame_radius: {type: number_or_null, min: 0.0, max: 0.5}
+        inner_radius: {type: number_or_null, min: 0.0, max: 0.5}
+        pupil_radius: {type: number_or_null, min: 0.0, max: 0.5}
+      bottom_left:
+        pupil_color: {type: color_or_null}
+        color: {type: color_or_null}
+        frame_radius: {type: number_or_null, min: 0.0, max: 0.5}
+        inner_radius: {type: number_or_null, min: 0.0, max: 0.5}
+        pupil_radius: {type: number_or_null, min: 0.0, max: 0.5}
+  background:
+    color:
+      type: color
+      default: "#FFFFFF"
+  logo:
+    enabled:
+      type: boolean
+      default: false
+    path:
+      type: path_or_null
+      default: null
+    scale:
+      type: number
+      default: 0.18
+      min: 0.05
+      max: 0.30
+    knockout:
+      type: boolean
+      default: true
+    padding_modules:
+      type: number
+      default: 0.65
+      min: 0.0
+    radius_modules:
+      type: number
+      default: 0.8
+      min: 0.0
+    clear_shape:
+      type: enum
+      values: [square, rounded, circle, squircle]
+      default: rounded
+      description: Geometry used for the logo knockout region. Use circle for circular clearing.
+    clear_intersection_mode:
+      type: enum
+      values: [center, any_overlap]
+      default: any_overlap
+      description: center removes only modules whose centers fall inside the clear zone; any_overlap removes any module or bridge touching it.
+    remove_partial_modules:
+      type: boolean
+      default: true
+      description: When true, omit any single module or collapsed run that overlaps the clear zone.
+    remove_partial_bridges:
+      type: boolean
+      default: true
+      description: When true, omit any bridge whose geometry overlaps the clear zone.
+    badge_enabled:
+      type: boolean
+      default: false
+    badge_shape:
+      type: enum
+      values: [square, rounded, circle, squircle]
+      default: circle
+    badge_color:
+      type: color
+      default: "#FFFFFF"
+    badge_stroke_color:
+      type: color_or_null
+      default: null
+    badge_stroke_width_modules:
+      type: number
+      default: 0.0
+      min: 0.0
+    badge_padding_modules:
+      type: number
+      default: 0.90
+      min: 0.0
+    badge_radius_modules:
+      type: number
+      default: 1.0
+      min: 0.0
+  decorations:
+    enabled:
+      type: boolean
+      default: false
+    seed:
+      type: integer
+      default: 1
+      description: Deterministic seed for decorative placement.
+    edge_dots:
+      enabled:
+        type: boolean
+        default: false
+      count:
+        type: integer
+        default: 8
+        min: 0
+      colors:
+        type: color_list
+        default: ["#F58220"]
+      size_modules:
+        type: number
+        default: 0.35
+        min: 0.05
+    sparkles:
+      enabled:
+        type: boolean
+        default: false
+      count:
+        type: integer
+        default: 4
+        min: 0
+      colors:
+        type: color_list
+        default: ["#F58220"]
+      size_modules:
+        type: number
+        default: 0.55
+        min: 0.05
+    logo_halo:
+      enabled:
+        type: boolean
+        default: false
+      color:
+        type: color
+        default: "#F58220"
+      opacity:
+        type: number
+        default: 0.14
+        min: 0.0
+        max: 1.0
+      padding_modules:
+        type: number
+        default: 0.6
+        min: 0.0
+  output:
+    validate:
+      type: boolean
+      default: true
+  autotune:
+    description: Optional search-space overrides for auto_tune.py. No hidden style preset is applied.
+    primary_shapes:
+      type: shape_list
+    secondary_shapes:
+      type: nullable_shape_list
+    patterns:
+      type: pattern_list
+    module_scales:
+      type: number_list
+    radii:
+      type: number_list
+    gradient_enabled:
+      type: boolean_list
+    connectivity_enabled:
+      type: boolean_list
+    horizontal_merges:
+      type: number_list
+    vertical_merges:
+      type: number_list
+    corner_merges:
+      type: number_list
+    max_runs:
+      type: integer_list
+    logo_scales:
+      type: number_list
+    padding_modules:
+      type: number_list
+    badge_enabled:
+      type: boolean_list
+    badge_padding_modules:
+      type: number_list
+    badge_stroke_width_modules:
+      type: number_list
+    max_candidates:
+      type: integer
+      default: 140
+      min: 1

@@ -1,0 +1,82 @@
+value: https://www.tiktok.com/@ucoolele
+error_correction: H
+quiet_zone: 4
+module_size: 12
+modules:
+  shape: rounded
+  secondary_shape: circle
+  pattern: diagonal
+  scale: 0.94
+  color: '#111111'
+  secondary_color: '#25F4EE'
+  radius: 0.22
+  gradient:
+    enabled: true
+    type: linear
+    mode: continuous
+    from: '#25F4EE'
+    to: '#FF0050'
+    angle: 45
+  connectivity:
+    enabled: true
+    horizontal_merge: 0.82
+    vertical_merge: 0.88
+    corner_merge: 0.3
+    max_run: 4
+    connector_overlap: 0.18
+    bridge:
+      style: waisted
+      max_thickness: 0.62
+      waist_ratio: 0.55
+      overlap: 0.14
+      curve: 0.65
+      connect_mixed_styles: false
+    corner_fillers:
+      enabled: false
+eyes:
+  frame_shape: rounded
+  pupil_shape: circle
+  color: '#111111'
+  pupil_color: '#FF0050'
+  radius_mode: layer
+  radius: 0.22
+background:
+  color: '#FFFFFF'
+logo:
+  enabled: true
+  path: icons/tiktok.svg
+  scale: 0.06
+  knockout: true
+  padding_modules: 0.15
+  radius_modules: 0.8
+  badge_enabled: true
+  badge_shape: squircle
+  badge_color: '#FFFFFF'
+  badge_stroke_color: '#25F4EE'
+  badge_stroke_width_modules: 0.04
+  badge_padding_modules: 0.25
+  badge_radius_modules: 0.9
+decorations:
+  enabled: true
+  seed: 9
+  edge_dots:
+    enabled: true
+    count: 6
+    colors:
+    - '#25F4EE'
+    - '#FF0050'
+    - '#111111'
+    size_modules: 0.26
+  sparkles:
+    enabled: true
+    count: 3
+    colors:
+    - '#FF0050'
+    size_modules: 0.38
+  logo_halo:
+    enabled: false
+    color: '#25F4EE'
+    opacity: 0.1
+    padding_modules: 0.5
+output:
+  validate: true

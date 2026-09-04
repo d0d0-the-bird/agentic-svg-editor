@@ -1,0 +1,10 @@
+numpy
+Pillow
+scipy
+scikit-image
+matplotlib
+cairosvg
+PyYAML
+lxml
+qrcode
+opencv-python

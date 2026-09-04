@@ -1,0 +1,44 @@
+input: input.svg
+output: output.svg
+preview: true
+
+# Named design/layout values. Tokens may reference other tokens with arithmetic.
+tokens:
+  spacing_unit: 8
+  page_margin: 5 * spacing_unit
+  card_gap: 4 * spacing_unit
+  card_padding: 2 * spacing_unit
+  pill_right_inset: 2 * spacing_unit
+  pill_top_inset: 2 * spacing_unit
+
+# Optional semantic anchors built from automatic rendered bbox anchors.
+# Use ${id.anchor} because SVG ids often contain dashes.
+anchors:
+  card-1:
+    content_left: "${card-1.left} + card_padding"
+    content_top: "${card-1.top} + card_padding"
+
+# Structural/content edits happen first.
+operations:
+  - type: set
+    id: duration-pill-1
+    attributes:
+      opacity: 0.95
+
+# Layout is then resolved from the post-operation rendered geometry.
+layout:
+  - id: card-1
+    left: "${page.left} + page_margin"
+    top: "${page.top} + 70"
+
+  - id: card-2
+    left: "${card-1.right} + card_gap"
+    top: "${card-1.top}"
+
+  - id: duration-pill-1
+    right: "${card-1.right} - pill_right_inset"
+    top: "${card-1.top} + pill_top_inset"
+
+  - id: card-1-title
+    left: "${card-1.content_left}"
+    top: "${card-1.content_top} + 10"
