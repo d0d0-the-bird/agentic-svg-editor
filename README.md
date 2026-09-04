@@ -8,7 +8,7 @@ Install [uv](https://docs.astral.sh/uv/), then use it to install Python and
 create the project environment:
 
 ```bash
-brew install uv
+brew install uv cairo
 uv python install 3.13
 uv venv --python 3.13
 uv pip install --python .venv/bin/python -r requirements.txt
@@ -18,6 +18,7 @@ Activate the environment before running the tools:
 
 ```bash
 source .venv/bin/activate
+export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
 ```
 
 ## Included tools
