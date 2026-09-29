@@ -12,6 +12,45 @@ If a crop contains multiple objects:
 3. keep the relevant contour IDs,
 4. re-run or use batch YAML with `keep_contours`.
 
+Each run writes both `final.svg`, with all contours in one compound path, and
+`final_objects.svg`, with disconnected outer shapes as separate path objects.
+Contained counter contours remain grouped with their enclosing object so holes
+render correctly.
+
+For explicit semantic grouping, assign every selected contour ID in batch YAML:
+
+```yaml
+assets:
+  - name: handle
+    input: extracted/handle.png
+    keep_contours: [1, 2, 3]
+    objects:
+      letter-at: [1, 3]
+      letter-u: [2]
+```
+
+Each mapping entry becomes a path ID in `final_objects.svg`. Group an outer
+contour with its counter contours to preserve holes. Explicit grouping rejects
+unknown, duplicated, or unassigned selected contours.
+
+`compose.py` combines traced SVG layers from YAML. A layer can use `include_ids`
+or `exclude_ids` to select specific objects from `final_objects.svg`, making
+effects such as selective colored text offsets reproducible:
+
+```yaml
+layers:
+  - id: cyan-offset
+    input: vectorized/handle/final_objects.svg
+    x: 8
+    y: 6
+    fill: '#25F4EE'
+    include_ids: [object-contour-1, object-contour-4]
+```
+
+Layers also accept `scale`. Composition YAML can define reusable linear
+gradients under `gradients`, then reference one with a layer fill such as
+`fill: url(#handle-gradient)`.
+
 ## CLI
 ```bash
 python tools/vectorizer/vectorize.py input.png --output-dir out

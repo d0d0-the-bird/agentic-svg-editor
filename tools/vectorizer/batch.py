@@ -78,6 +78,12 @@ def main():
                 cmd.extend([flag, str(params[key])])
         for contour_id in params.get("keep_contours", []) or []:
             cmd.extend(["--keep-contour", str(int(contour_id))])
+        objects = params.get("objects") or {}
+        if not isinstance(objects, dict):
+            raise ValueError(f"Asset {name!r} objects must be a mapping of object names to contour ID lists")
+        for object_name, contour_ids in objects.items():
+            ids = ",".join(str(int(contour_id)) for contour_id in contour_ids)
+            cmd.extend(["--object-contours", f"{object_name}={ids}"])
 
         print(f"\n=== {name} ===")
         print(" ".join(cmd))

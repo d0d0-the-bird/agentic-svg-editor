@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import cairosvg
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.path import Path as MatplotlibPath
 from PIL import Image
 from scipy.ndimage import binary_dilation, gaussian_filter, map_coordinates
 from skimage.measure import find_contours
@@ -31,7 +33,9 @@ def parse_args():
     p.add_argument("--min-contour-length", type=float, default=8.0)
     p.add_argument("--max-contours", type=int, default=0, help="0 keeps all before explicit contour selection.")
     p.add_argument("--keep-contour", action="append", type=int, default=[],
-                   help="Keep this numbered contour after extraction; repeatable. IDs are deterministic after length sorting.")
+                    help="Keep this numbered contour after extraction; repeatable. IDs are deterministic after length sorting.")
+    p.add_argument("--object-contours", action="append", default=[], metavar="NAME=ID,ID",
+                   help="Assign selected contour IDs to one named SVG object; repeatable. When used, every selected contour must be assigned exactly once.")
     p.add_argument("--blur-sigma", type=float, default=0.42)
     p.add_argument("--foreground-quantile", type=float, default=85.0)
     p.add_argument("--membership-mode", choices=["distance", "projection"], default="distance",
@@ -774,6 +778,88 @@ def save_final(svg_path, png_path, width, height, fits, fill):
                      background_color="white")
 
 
+def parse_object_groups(values):
+    groups = []
+    for value in values:
+        if "=" not in value:
+            raise ValueError(f"Invalid --object-contours value {value!r}; expected NAME=ID,ID")
+        name, raw_ids = value.split("=", 1)
+        name = re.sub(r"[^A-Za-z0-9_.:-]+", "-", name.strip()).strip("-")
+        ids = [int(part.strip()) for part in raw_ids.split(",") if part.strip()]
+        if not name or not ids:
+            raise ValueError(f"Invalid --object-contours value {value!r}; expected NAME=ID,ID")
+        groups.append((name, ids))
+    return groups
+
+
+def save_objects(svg_path, width, height, records, contours, fits, fill, object_groups):
+    record_indexes = {record["id"]: index for index, record in enumerate(records)}
+    if object_groups:
+        assigned = [contour_id for _, ids in object_groups for contour_id in ids]
+        unknown = sorted(set(assigned) - set(record_indexes))
+        duplicate = sorted({contour_id for contour_id in assigned if assigned.count(contour_id) > 1})
+        missing = sorted(set(record_indexes) - set(assigned))
+        if unknown or duplicate or missing:
+            raise ValueError(
+                f"Invalid object contour groups; unknown={unknown}, duplicate={duplicate}, unassigned={missing}"
+            )
+        paths = []
+        for name, contour_ids in object_groups:
+            compound = " ".join(svg_subpath(fits[record_indexes[contour_id]]["combined"]) for contour_id in contour_ids)
+            paths.append(
+                f'  <path id="{name}" data-contours="{",".join(map(str, contour_ids))}" d="{compound}" fill="{fill}" fill-rule="nonzero"/>'
+            )
+    else:
+        paths = _automatic_object_paths(records, contours, fits, fill)
+
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}">\n'
+        + "\n".join(paths)
+        + "\n</svg>\n"
+    )
+    svg_path.write_text(svg, encoding="utf-8")
+
+
+def _automatic_object_paths(records, contours, fits, fill):
+    areas = [
+        abs(float(np.dot(points[:, 0], np.roll(points[:, 1], 1)) - np.dot(points[:, 1], np.roll(points[:, 0], 1)))) / 2.0
+        for points in contours
+    ]
+    parents: list[int | None] = []
+    for index, points in enumerate(contours):
+        containers = [
+            candidate
+            for candidate, polygon in enumerate(contours)
+            if candidate != index
+            and areas[candidate] > areas[index]
+            and MatplotlibPath(polygon, closed=True).contains_point(points[0])
+        ]
+        parents.append(min(containers, key=lambda candidate: areas[candidate]) if containers else None)
+
+    depths = []
+    for index in range(len(contours)):
+        depth = 0
+        parent = parents[index]
+        while parent is not None:
+            depth += 1
+            parent = parents[parent]
+        depths.append(depth)
+
+    paths = []
+    for index, fit in enumerate(fits):
+        if depths[index] % 2:
+            continue
+        children = [child for child, parent in enumerate(parents) if parent == index and depths[child] == depths[index] + 1]
+        compound = " ".join(svg_subpath(fits[item]["combined"]) for item in [index, *children])
+        contour_id = records[index]["id"]
+        paths.append(
+            f'  <path id="object-contour-{contour_id}" d="{compound}" fill="{fill}" fill-rule="nonzero"/>'
+        )
+
+    return paths
+
+
 def save_contact_sheet(paths, output):
     images = [Image.open(p).convert("RGB") for p in paths]
     target_h = 520
@@ -820,6 +906,7 @@ def main():
     if not contour_records:
         raise RuntimeError("No meaningful contours detected.")
     selected_records = select_contours(contour_records, args.keep_contour)
+    object_groups = parse_object_groups(args.object_contours)
     contours = [r["points"] for r in selected_records]
 
     contours, normals, orientation_stats = orient_solid_left(
@@ -839,6 +926,7 @@ def main():
     p4 = args.output_dir / "05_combined.png"
     p5 = args.output_dir / "06_final_filled.png"
     svg = args.output_dir / "final.svg"
+    objects_svg = args.output_dir / "final_objects.svg"
     contact = args.output_dir / "pipeline_contact_sheet.png"
     metadata = args.output_dir / "metadata.json"
     line_log = args.output_dir / "line_fit_log.json"
@@ -851,6 +939,7 @@ def main():
     save_joint_refinement(p4j, rgb, fits, args.diagnostic_dpi)
     save_combined(p4, rgb, fits, args.diagnostic_dpi)
     save_final(svg, p5, w, h, fits, args.fill)
+    save_objects(objects_svg, w, h, selected_records, contours, fits, args.fill, object_groups)
     save_contact_sheet([p0, p1, p2, p3, p4j, p4, p5], contact)
 
     line_log_data = {
@@ -900,6 +989,7 @@ def main():
             {k: v for k, v in r.items() if k != "points"} for r in contour_records
         ],
         "keep_contours": [int(v) for v in args.keep_contour],
+        "object_contours": {name: ids for name, ids in object_groups},
         "threshold": args.threshold,
         "line_threshold": line_threshold,
         "bezier_threshold": bezier_threshold,
@@ -933,7 +1023,7 @@ def main():
 
     print(f"Detected {len(contour_records)} contours; selected {len(contours)}")
     print(f"Output directory: {args.output_dir}")
-    for p in [p0, p1, p2, p3, p4j, p4, p5, svg, contact, metadata, line_log, joint_log]:
+    for p in [p0, p1, p2, p3, p4j, p4, p5, svg, objects_svg, contact, metadata, line_log, joint_log]:
         print(" ", p.name)
 
 
