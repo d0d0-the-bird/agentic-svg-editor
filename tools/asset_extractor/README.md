@@ -200,6 +200,11 @@ selection:
 
 Masked selections are written as RGBA PNGs with transparency. By default the example jobs also save the grayscale mask itself.
 
+When the next stage intentionally derives geometry from visible RGB rather than
+alpha, set `rgb_background: '#FFFFFF'` on an asset or its selection. Unselected
+RGB pixels are then matted to that color while the diagnostic alpha mask remains
+available.
+
 Useful diagnostics:
 
 - `00_selection_overlay.png` — all boxes/polygons/seeds over the original image

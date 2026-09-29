@@ -576,7 +576,18 @@ def apply_selection(
         raise ValueError(f"Unknown selection mode '{mode}' for asset '{item['name']}'")
 
     rgba = np.asarray(crop, dtype=np.uint8).copy()
-    rgba[:, :, 3] = np.clip(mask * 255.0, 0, 255).astype(np.uint8)
+    alpha = np.clip(mask, 0.0, 1.0)
+    rgba[:, :, 3] = (alpha * 255.0).astype(np.uint8)
+    rgb_background = item.get("rgb_background", sel.get("rgb_background"))
+    if rgb_background is not None:
+        matte = np.asarray(parse_rgb_color(rgb_background), dtype=np.float32)
+        rgba[:, :, :3] = np.clip(
+            rgba[:, :, :3].astype(np.float32) * alpha[:, :, None]
+            + matte[None, None, :] * (1.0 - alpha[:, :, None]),
+            0,
+            255,
+        ).astype(np.uint8)
+        meta["rgb_background"] = list(parse_rgb_color(rgb_background))
     return Image.fromarray(rgba, "RGBA"), mask, meta
 
 
