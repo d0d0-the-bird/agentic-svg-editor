@@ -8,3 +8,4 @@ PyYAML
 lxml
 qrcode
 opencv-python
+pyzbar

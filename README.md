@@ -8,7 +8,7 @@ Install [uv](https://docs.astral.sh/uv/), then use it to install Python and
 create the project environment:
 
 ```bash
-brew install uv cairo
+brew install uv cairo zbar
 uv python install 3.13
 uv venv --python 3.13
 uv pip install --python .venv/bin/python -r requirements.txt

@@ -9,7 +9,7 @@ modules:
   scale: 0.94
   color: '#111111'
   secondary_color: '#25F4EE'
-  radius: 0.22
+  radius: 0.42
   gradient:
     enabled: true
     type: linear
@@ -19,20 +19,19 @@ modules:
     angle: 45
   connectivity:
     enabled: true
-    horizontal_merge: 0.82
-    vertical_merge: 0.88
-    corner_merge: 0.3
-    max_run: 4
-    connector_overlap: 0.18
-    bridge:
-      style: waisted
-      max_thickness: 0.62
-      waist_ratio: 0.55
-      overlap: 0.14
-      curve: 0.65
-      connect_mixed_styles: false
-    corner_fillers:
-      enabled: false
+    mode: liquid
+    liquid:
+      supersample: 12
+      blur_modules: 0.20
+      threshold: 0.37
+      simplify_modules: 0.025
+      min_contour_area_modules2: 0.02
+      orthogonal_bridge_width_modules: 0.62
+      fill_dense_junctions: true
+      diagonal_seed_modules: 0.22
+      diagonal_reach_modules: 0.20
+      diagonal_seed_probability: 0.55
+      seed: 1
 eyes:
   frame_shape: rounded
   pupil_shape: circle

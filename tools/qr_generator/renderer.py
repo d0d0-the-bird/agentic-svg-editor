@@ -25,6 +25,7 @@ MODULE_SHAPES = {
     "diamond",
     "squircle",
     "star",
+    "sparkle",
     "petal",
     "soft_blob",
     "capsule_h",
@@ -67,6 +68,7 @@ DEFAULT_SPEC: dict[str, Any] = {
         },
         "connectivity": {
             "enabled": False,
+            "mode": "legacy",
             "horizontal_merge": 0.85,
             "vertical_merge": 0.80,
             "corner_merge": 0.35,
@@ -88,6 +90,19 @@ DEFAULT_SPEC: dict[str, Any] = {
             },
             "corner_fillers": {
                 "enabled": False,
+            },
+            "liquid": {
+                "supersample": 10,
+                "blur_modules": 0.16,
+                "threshold": 0.42,
+                "simplify_modules": 0.035,
+                "min_contour_area_modules2": 0.04,
+                "orthogonal_bridge_width_modules": 0.0,
+                "fill_dense_junctions": False,
+                "diagonal_seed_modules": 0.0,
+                "diagonal_reach_modules": 0.16,
+                "diagonal_seed_probability": 1.0,
+                "seed": 1,
             },
         },
     },
@@ -137,6 +152,8 @@ DEFAULT_SPEC: dict[str, Any] = {
         "seed": 1,
         "edge_dots": {"enabled": False, "count": 8, "colors": ["#F58220"], "size_modules": 0.35},
         "sparkles": {"enabled": False, "count": 4, "colors": ["#F58220"], "size_modules": 0.55},
+        "edge_marks": {"enabled": False, "colors": ["#F58220"], "size_modules": 1.6, "stroke_width_modules": 0.28},
+        "images": [],
         "logo_halo": {"enabled": False, "color": "#F58220", "opacity": 0.14, "padding_modules": 0.6},
     },
     "output": {"validate": True},
@@ -209,6 +226,7 @@ def normalize_spec(spec: dict[str, Any] | None) -> dict[str, Any]:
         "connectivity",
         {
             "enabled": False,
+            "mode": "legacy",
             "horizontal_merge": 0.85,
             "vertical_merge": 0.80,
             "corner_merge": 0.35,
@@ -225,9 +243,25 @@ def normalize_spec(spec: dict[str, Any] | None) -> dict[str, Any]:
             "corner_fillers": {
                 "enabled": False,
             },
+            "liquid": {
+                "supersample": 10,
+                "blur_modules": 0.16,
+                "threshold": 0.42,
+                "simplify_modules": 0.035,
+                "min_contour_area_modules2": 0.04,
+                "orthogonal_bridge_width_modules": 0.0,
+                "fill_dense_junctions": False,
+                "diagonal_seed_modules": 0.0,
+                "diagonal_reach_modules": 0.16,
+                "diagonal_seed_probability": 1.0,
+                "seed": 1,
+            },
         },
     )
     conn["enabled"] = bool(conn.get("enabled", False))
+    conn["mode"] = str(conn.get("mode", "legacy"))
+    if conn["mode"] not in {"legacy", "liquid"}:
+        raise ValueError("modules.connectivity.mode must be legacy or liquid")
     conn["horizontal_merge"] = _clamp(float(conn.get("horizontal_merge", 0.85)), 0.0, 1.0)
     conn["vertical_merge"] = _clamp(float(conn.get("vertical_merge", 0.80)), 0.0, 1.0)
     conn["corner_merge"] = _clamp(float(conn.get("corner_merge", 0.35)), 0.0, 1.0)
@@ -258,6 +292,21 @@ def normalize_spec(spec: dict[str, Any] | None) -> dict[str, Any]:
     bridge["connect_mixed_styles"] = bool(bridge.get("connect_mixed_styles", False))
     corner_fillers = conn.setdefault("corner_fillers", {"enabled": False})
     corner_fillers["enabled"] = bool(corner_fillers.get("enabled", False))
+    liquid = conn.setdefault(
+        "liquid",
+        {"supersample": 10, "blur_modules": 0.16, "threshold": 0.42, "simplify_modules": 0.035, "min_contour_area_modules2": 0.04, "orthogonal_bridge_width_modules": 0.0, "fill_dense_junctions": False, "diagonal_seed_modules": 0.0, "diagonal_reach_modules": 0.16, "diagonal_seed_probability": 1.0, "seed": 1},
+    )
+    liquid["supersample"] = max(4, min(24, int(liquid.get("supersample", 10))))
+    liquid["blur_modules"] = _clamp(float(liquid.get("blur_modules", 0.16)), 0.0, 0.5)
+    liquid["threshold"] = _clamp(float(liquid.get("threshold", 0.42)), 0.05, 0.95)
+    liquid["simplify_modules"] = _clamp(float(liquid.get("simplify_modules", 0.035)), 0.0, 0.2)
+    liquid["min_contour_area_modules2"] = _clamp(float(liquid.get("min_contour_area_modules2", 0.04)), 0.0, 1.0)
+    liquid["orthogonal_bridge_width_modules"] = _clamp(float(liquid.get("orthogonal_bridge_width_modules", 0.0)), 0.0, 1.0)
+    liquid["fill_dense_junctions"] = bool(liquid.get("fill_dense_junctions", False))
+    liquid["diagonal_seed_modules"] = _clamp(float(liquid.get("diagonal_seed_modules", 0.0)), 0.0, 0.35)
+    liquid["diagonal_reach_modules"] = _clamp(float(liquid.get("diagonal_reach_modules", 0.16)), 0.0, 0.5)
+    liquid["diagonal_seed_probability"] = _clamp(float(liquid.get("diagonal_seed_probability", 1.0)), 0.0, 1.0)
+    liquid["seed"] = int(liquid.get("seed", 1))
 
     eyes = s["eyes"]
     for key in ("frame_shape", "pupil_shape"):
@@ -333,6 +382,32 @@ def normalize_spec(spec: dict[str, Any] | None) -> dict[str, Any]:
             colors = [colors]
         block["colors"] = list(colors)
         block["size_modules"] = max(0.05, float(block.get("size_modules", defaults["size_modules"])))
+    marks = deco.setdefault("edge_marks", {"enabled": False, "colors": ["#F58220"], "size_modules": 1.6, "stroke_width_modules": 0.28})
+    marks["enabled"] = bool(marks.get("enabled", False))
+    mark_colors = marks.get("colors") or ["#F58220"]
+    if isinstance(mark_colors, str):
+        mark_colors = [mark_colors]
+    marks["colors"] = list(mark_colors)
+    marks["size_modules"] = max(0.5, float(marks.get("size_modules", 1.6)))
+    marks["stroke_width_modules"] = max(0.05, float(marks.get("stroke_width_modules", 0.28)))
+    if marks.get("assets"):
+        raise ValueError("decorations.edge_marks.assets was removed; place traced assets with decorations.images")
+    images = deco.get("images") or []
+    if not isinstance(images, list):
+        raise ValueError("decorations.images must be a list")
+    normalized_images = []
+    for i, item in enumerate(images):
+        if not isinstance(item, dict) or not item.get("path"):
+            raise ValueError(f"decorations.images[{i}] must be a mapping with a path")
+        placed = dict(item)
+        for key in ("x_fraction", "y_fraction", "x_modules", "y_modules"):
+            placed[key] = float(item.get(key, 0.0))
+        for key in ("width_modules", "height_modules"):
+            if key not in item:
+                raise ValueError(f"decorations.images[{i}].{key} is required")
+            placed[key] = max(0.0, float(item[key]))
+        normalized_images.append(placed)
+    deco["images"] = normalized_images
     halo = deco.setdefault("logo_halo", {"enabled": False, "color": "#F58220", "opacity": 0.14, "padding_modules": 0.6})
     halo["enabled"] = bool(halo.get("enabled", False))
     halo["opacity"] = _clamp(float(halo.get("opacity", 0.14)), 0.0, 1.0)
@@ -492,6 +567,8 @@ def shape_svg(shape: str, x: float, y: float, size: float, color: str, radius: f
         return f'<path d="{_squircle_path(x, y, size)}" fill="{esc}"/>'
     if shape == "star":
         return f'<path d="{_star_path(x, y, size)}" fill="{esc}"/>'
+    if shape == "sparkle":
+        return _sparkle_svg(x + size / 2.0, y + size / 2.0, size, color)
     if shape == "petal":
         return f'<path d="{_petal_path(x, y, size)}" fill="{esc}"/>'
     if shape == "soft_blob":
@@ -561,6 +638,223 @@ def _bridge_path(x0: float, y0: float, x1: float, y1: float, max_thickness: floa
 
 def _bridge_svg(x0: float, y0: float, x1: float, y1: float, color: str, max_thickness: float, style: str, waist_ratio: float, curve: float) -> str:
     return f'<path d="{_bridge_path(x0, y0, x1, y1, max_thickness, style, waist_ratio, curve)}" fill="{html.escape(color)}"/>'
+
+
+def _draw_mask_module(draw: Any, shape: str, x: float, y: float, size: float, radius: float) -> None:
+    box = (x, y, x + size, y + size)
+    if shape == "circle":
+        draw.ellipse(box, fill=255)
+    elif shape == "diamond":
+        half = size / 2.0
+        draw.polygon(((x + half, y), (x + size, y + half), (x + half, y + size), (x, y + half)), fill=255)
+    elif shape == "square":
+        draw.rectangle(box, fill=255)
+    elif shape == "capsule_h":
+        h = size * 0.62
+        yy = y + (size - h) / 2.0
+        draw.rounded_rectangle((x, yy, x + size, yy + h), radius=h / 2.0, fill=255)
+    elif shape == "capsule_v":
+        w = size * 0.62
+        xx = x + (size - w) / 2.0
+        draw.rounded_rectangle((xx, y, xx + w, y + size), radius=w / 2.0, fill=255)
+    else:
+        rr = size * (0.38 if shape == "squircle" else radius)
+        draw.rounded_rectangle(box, radius=max(0.0, min(size / 2.0, rr)), fill=255)
+
+
+def _smooth_closed_path(points: list[tuple[float, float]], tension: float = 0.72) -> str:
+    if len(points) < 3:
+        return ""
+    if math.hypot(points[0][0] - points[-1][0], points[0][1] - points[-1][1]) < 1e-6:
+        points = points[:-1]
+    if len(points) < 3:
+        return ""
+    commands = [f"M {points[0][0]:.4f},{points[0][1]:.4f}"]
+    count = len(points)
+    for i, p1 in enumerate(points):
+        p0 = points[(i - 1) % count]
+        p2 = points[(i + 1) % count]
+        p3 = points[(i + 2) % count]
+        c1 = (p1[0] + (p2[0] - p0[0]) * tension / 6.0, p1[1] + (p2[1] - p0[1]) * tension / 6.0)
+        c2 = (p2[0] - (p3[0] - p1[0]) * tension / 6.0, p2[1] - (p3[1] - p1[1]) * tension / 6.0)
+        commands.append(f"C {c1[0]:.4f},{c1[1]:.4f} {c2[0]:.4f},{c2[1]:.4f} {p2[0]:.4f},{p2[1]:.4f}")
+    commands.append("Z")
+    return " ".join(commands)
+
+
+def _liquid_diagonal_path_edges(
+    cells: set[tuple[int, int]], settings: dict[str, Any]
+) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    orthogonal = ((-1, 0), (1, 0), (0, -1), (0, 1))
+
+    def neighbors(cell: tuple[int, int]) -> list[tuple[int, int]]:
+        x, y = cell
+        return [(x + dx, y + dy) for dx, dy in orthogonal if (x + dx, y + dy) in cells]
+
+    def continues(start: tuple[int, int], end: tuple[int, int], adjacent: list[tuple[int, int]]) -> bool:
+        if not adjacent:
+            return True
+        incoming = (start[0] - adjacent[0][0], start[1] - adjacent[0][1])
+        outgoing = (end[0] - start[0], end[1] - start[1])
+        return incoming[0] * outgoing[0] + incoming[1] * outgoing[1] > 0
+
+    candidates: list[tuple[float, tuple[int, int], tuple[int, int]]] = []
+    for x, y in sorted(cells):
+        start = (x, y)
+        start_neighbors = neighbors(start)
+        if len(start_neighbors) > 1:
+            continue
+        for dx in (-1, 1):
+            end = (x + dx, y + 1)
+            if end not in cells or (x + dx, y) in cells or (x, y + 1) in cells:
+                continue
+            end_neighbors = neighbors(end)
+            if len(end_neighbors) > 1:
+                continue
+            if not continues(start, end, start_neighbors) or not continues(end, start, end_neighbors):
+                continue
+            rank = _selection_value(settings["seed"], x, y, 6 if dx > 0 else 7)
+            candidates.append((rank, start, end))
+
+    selected: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    used: set[tuple[int, int]] = set()
+    for rank, start, end in sorted(candidates):
+        if rank >= settings["diagonal_seed_probability"] or start in used or end in used:
+            continue
+        selected.append((start, end))
+        used.update((start, end))
+    return selected
+
+
+def _liquid_field_svg(
+    cells: set[tuple[int, int]],
+    style_cache: dict[tuple[int, int], dict[str, Any]],
+    module_size: float,
+    quiet_zone: int,
+    module_scale: float,
+    radius: float,
+    settings: dict[str, Any],
+    selection: dict[str, Any],
+) -> tuple[list[str], set[tuple[int, int]]]:
+    import numpy as np
+    from PIL import Image, ImageDraw
+    from scipy.ndimage import gaussian_filter
+    from skimage.measure import approximate_polygon, find_contours
+
+    supersample = settings["supersample"]
+    pad = supersample
+    n = max(max(x for x, _ in cells), max(y for _, y in cells)) + 1 if cells else 0
+    groups: dict[tuple[Any, ...], list[tuple[int, int]]] = {}
+    rendered_cells: set[tuple[int, int]] = set()
+    for cell in cells:
+        style = style_cache[cell]
+        if style.get("accent_selected"):
+            continue
+        cell_scale = style.get("scale") if style.get("scale") is not None else module_scale
+        key = (style["shape"], style["color"], cell_scale)
+        groups.setdefault(key, []).append(cell)
+        rendered_cells.add(cell)
+
+    output: list[str] = []
+    canvas_size = (n + 2) * supersample
+    for (shape, color, cell_scale), group_cells in groups.items():
+        image = Image.new("L", (canvas_size, canvas_size), 0)
+        draw = ImageDraw.Draw(image)
+        draw_size = supersample * cell_scale
+        inset = (supersample - draw_size) / 2.0
+        for x, y in group_cells:
+            _draw_mask_module(
+                draw,
+                shape,
+                pad + x * supersample + inset,
+                pad + y * supersample + inset,
+                draw_size,
+                radius,
+            )
+
+        group_set = set(group_cells)
+        bridge_width = settings["orthogonal_bridge_width_modules"] * supersample
+        if bridge_width > 0:
+            half_width = bridge_width / 2.0
+            for x, y in group_cells:
+                cx = pad + (x + 0.5) * supersample
+                cy = pad + (y + 0.5) * supersample
+                if (x + 1, y) in group_set and _selected(
+                    selection["horizontal_probability"], selection["seed"], x, y, 0
+                ):
+                    draw.rectangle((cx, cy - half_width, cx + supersample, cy + half_width), fill=255)
+                if (x, y + 1) in group_set and _selected(
+                    selection["vertical_probability"], selection["seed"], x, y, 1
+                ):
+                    draw.rectangle((cx - half_width, cy, cx + half_width, cy + supersample), fill=255)
+                if settings["fill_dense_junctions"] and {
+                    (x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)
+                }.issubset(group_set):
+                    junction_x = pad + (x + 1) * supersample
+                    junction_y = pad + (y + 1) * supersample
+                    draw.ellipse(
+                        (
+                            junction_x - half_width,
+                            junction_y - half_width,
+                            junction_x + half_width,
+                            junction_y + half_width,
+                        ),
+                        fill=255,
+                    )
+
+        seed_radius = settings["diagonal_seed_modules"] * supersample
+        if seed_radius > 0:
+            seed_reach = settings["diagonal_reach_modules"] * supersample
+            for start, end in _liquid_diagonal_path_edges(group_set, settings):
+                    dx = end[0] - start[0]
+                    corner_x = pad + (start[0] + (1 if dx > 0 else 0)) * supersample
+                    corner_y = pad + (start[1] + 1) * supersample
+                    ux = dx / math.sqrt(2.0)
+                    uy = 1.0 / math.sqrt(2.0)
+                    p0 = (corner_x - ux * seed_reach, corner_y - uy * seed_reach)
+                    p1 = (corner_x + ux * seed_reach, corner_y + uy * seed_reach)
+                    draw.line((p0, p1), fill=255, width=max(1, round(seed_radius * 2.0)))
+                    for px, py in (p0, p1):
+                        draw.ellipse(
+                            (px - seed_radius, py - seed_radius, px + seed_radius, py + seed_radius),
+                            fill=255,
+                        )
+
+        mask = np.asarray(image, dtype=np.float32) / 255.0
+        sigma = settings["blur_modules"] * supersample
+        field = gaussian_filter(mask, sigma=sigma) if sigma > 0 else mask
+        contours = find_contours(field, settings["threshold"])
+        subpaths: list[str] = []
+        tolerance = settings["simplify_modules"] * supersample
+        for contour in contours:
+            if len(contour) < 4:
+                continue
+            contour_xy = contour[:, ::-1]
+            contour_area = 0.5 * abs(
+                float(
+                    np.dot(contour_xy[:, 0], np.roll(contour_xy[:, 1], 1))
+                    - np.dot(contour_xy[:, 1], np.roll(contour_xy[:, 0], 1))
+                )
+            )
+            if contour_area < settings["min_contour_area_modules2"] * supersample * supersample:
+                continue
+            if tolerance > 0:
+                contour = approximate_polygon(contour, tolerance=tolerance)
+            points = [
+                (
+                    quiet_zone * module_size + (float(col) - pad) * module_size / supersample,
+                    quiet_zone * module_size + (float(row) - pad) * module_size / supersample,
+                )
+                for row, col in contour
+            ]
+            path = _smooth_closed_path(points)
+            if path:
+                subpaths.append(path)
+        if subpaths:
+            output.append(
+                f'<path d="{" ".join(subpaths)}" fill="{html.escape(str(color))}" fill-rule="evenodd"/>'
+            )
+    return output, rendered_cells
 
 
 def _svg_gradient_def(gradient_id: str, grad: dict[str, Any], *, px: float | None = None, data_min: float | None = None, data_max: float | None = None) -> str:
@@ -734,15 +1028,61 @@ def _safe_decoration_positions(px: float, qz_px: float, count: int, seed: int):
 
 
 def _sparkle_svg(cx: float, cy: float, size: float, color: str) -> str:
-    r = size / 2.0
-    d = (
-        f"M {cx:.4f},{cy-r:.4f} "
-        f"C {cx+r*0.16:.4f},{cy-r*0.16:.4f} {cx+r*0.16:.4f},{cy-r*0.16:.4f} {cx+r:.4f},{cy:.4f} "
-        f"C {cx+r*0.16:.4f},{cy+r*0.16:.4f} {cx+r*0.16:.4f},{cy+r*0.16:.4f} {cx:.4f},{cy+r:.4f} "
-        f"C {cx-r*0.16:.4f},{cy+r*0.16:.4f} {cx-r*0.16:.4f},{cy+r*0.16:.4f} {cx-r:.4f},{cy:.4f} "
-        f"C {cx-r*0.16:.4f},{cy-r*0.16:.4f} {cx-r*0.16:.4f},{cy-r*0.16:.4f} {cx:.4f},{cy-r:.4f} Z"
-    )
-    return f'<path d="{d}" fill="{html.escape(color)}"/>'
+    # Normalized from the vectorizer output for the uploaded YouTube reference.
+    d = "M 36.8822 49 L 38.1372 45.6814 C 40.2074 40.2075 43.8198 37.2628 48.8796 34.5958 L 52.8983 32.4775 C 59.7537 28.864 53.2813 24.956 49 23.4385 C 43.9826 20.1294 39.5267 17.1572 37.7415 10.9818 L 35.4341 3 C 35.3384 2.6688 32.3425 2.0177 32.133 2.049 L 29 2.5163 C 27.593 2.7261 27.7422 3.9225 27.4126 5 L 26.2045 8.9486 C 23.4653 17.9015 18.309 20.9385 10.4511 25 C 3.3685 29.2126 11.3615 31.9618 14.7116 34 C 19.8119 37.6819 22.9245 39.8994 25.1279 45.8563 L 28.51 55 C 30.7833 61.146 35.6884 53.4539 36.329 51 C 36.3924 50.7627 36.7958 49.2287 36.8822 49 Z"
+    scale = size / 69.0
+    tx = cx - 33.0 * scale
+    ty = cy - 34.5 * scale
+    return f'<path d="{d}" transform="translate({tx:.4f} {ty:.4f}) scale({scale:.6f})" fill="{html.escape(color)}"/>'
+
+
+def _decoration_images_svg(px: float, module_size: float, images: list[dict[str, Any]], base_dir: str | Path | None) -> list[str]:
+    output = []
+    for item in images:
+        asset_path = Path(item["path"])
+        if not asset_path.is_absolute():
+            asset_path = Path(base_dir or ".") / asset_path
+        x = item["x_fraction"] * px + item["x_modules"] * module_size
+        y = item["y_fraction"] * px + item["y_modules"] * module_size
+        width = item["width_modules"] * module_size
+        height = item["height_modules"] * module_size
+        uri = data_uri(asset_path)
+        id_attr = f'id="{html.escape(item["id"])}" ' if item.get("id") else ""
+        output.append(
+            f'<image {id_attr}x="{x:.4f}" y="{y:.4f}" width="{width:.4f}" height="{height:.4f}" '
+            f'preserveAspectRatio="xMidYMid meet" href="{uri}" xlink:href="{uri}"/>'
+        )
+    return output
+
+
+def _edge_marks_svg(px: float, qz_px: float, module_size: float, settings: dict[str, Any]) -> list[str]:
+    colors = settings.get("colors") or ["#F58220"]
+    size = settings.get("size_modules", 1.6) * module_size
+    stroke = settings.get("stroke_width_modules", 0.28) * module_size
+    edge = max(module_size * 0.7, qz_px * 0.22)
+    center = px / 2.0
+
+    def path(d: str, color: str) -> str:
+        return f'<path d="{d}" fill="none" stroke="{html.escape(color)}" stroke-width="{stroke:.4f}" stroke-linecap="round" stroke-linejoin="round"/>'
+
+    top = f'M {center-size*0.65:.4f},{edge+size*0.42:.4f} C {center-size*0.28:.4f},{edge:.4f} {center+size*0.28:.4f},{edge:.4f} {center+size*0.65:.4f},{edge+size*0.42:.4f}'
+    bottom = f'M {center-size*0.65:.4f},{px-edge-size*0.42:.4f} C {center-size*0.28:.4f},{px-edge:.4f} {center+size*0.28:.4f},{px-edge:.4f} {center+size*0.65:.4f},{px-edge-size*0.42:.4f}'
+    rx = px - edge
+    ry = px * 0.63
+    wave = f'M {rx-size*0.28:.4f},{ry-size:.4f} C {rx+size*0.38:.4f},{ry-size*0.62:.4f} {rx-size*0.38:.4f},{ry-size*0.28:.4f} {rx:.4f},{ry:.4f} C {rx+size*0.38:.4f},{ry+size*0.28:.4f} {rx-size*0.38:.4f},{ry+size*0.62:.4f} {rx+size*0.28:.4f},{ry+size:.4f}'
+    lx = edge
+    ly = px * 0.70
+    rays = [
+        f'M {lx:.4f},{ly-size*0.72:.4f} L {lx+size*0.58:.4f},{ly-size*0.42:.4f}',
+        f'M {lx-size*0.08:.4f},{ly:.4f} L {lx+size*0.64:.4f},{ly:.4f}',
+        f'M {lx:.4f},{ly+size*0.72:.4f} L {lx+size*0.58:.4f},{ly+size*0.42:.4f}',
+    ]
+    return [
+        path(top, colors[0]),
+        path(bottom, colors[0]),
+        path(wave, colors[min(1, len(colors) - 1)]),
+        *(path(d, colors[i % len(colors)]) for i, d in enumerate(rays)),
+    ]
 
 
 def _accent_style(mods: dict[str, Any], x: int, y: int) -> dict[str, Any] | None:
@@ -932,6 +1272,16 @@ def render_svg(spec: dict[str, Any], base_dir: str | Path | None = None) -> str:
             for i, (sx, sy) in enumerate(positions):
                 parts.append(_sparkle_svg(sx, sy, ss, colors[i % len(colors)]))
             parts.append('</g>')
+        marks = deco.get("edge_marks", {})
+        if marks.get("enabled"):
+            parts.append('<g id="qr-decoration-edge-marks">')
+            parts.extend(_edge_marks_svg(px, qz_px, m, marks))
+            parts.append('</g>')
+        images = deco.get("images") or []
+        if images:
+            parts.append('<g id="qr-decoration-images">')
+            parts.extend(_decoration_images_svg(px, m, images, base_dir))
+            parts.append('</g>')
 
     parts.append('<g id="qr-modules">')
 
@@ -953,7 +1303,23 @@ def render_svg(spec: dict[str, Any], base_dir: str | Path | None = None) -> str:
     conn_enabled = bool(conn.get("enabled"))
     runs: list[dict[str, Any]] = []
     run_map: dict[tuple[int, int], int] = {}
-    if conn_enabled:
+    liquid_cells: set[tuple[int, int]] = set()
+    if conn_enabled and conn["mode"] == "liquid":
+        liquid_paths, liquid_cells = _liquid_field_svg(
+            data_cells,
+            style_cache,
+            m,
+            qz,
+            scale,
+            mods["radius"],
+            conn["liquid"],
+            conn["selection"],
+        )
+        if liquid_paths:
+            parts.append('<g id="qr-module-liquid-field">')
+            parts.extend(liquid_paths)
+            parts.append('</g>')
+    if conn_enabled and conn["mode"] == "legacy":
         runs, run_map = _find_linear_runs(data_cells, style_cache, n, conn["max_run"], conn["selection"])
 
     if conn_enabled and runs:
@@ -984,9 +1350,10 @@ def render_svg(spec: dict[str, Any], base_dir: str | Path | None = None) -> str:
         parts.append('</g>')
 
     # connectors before single modules so singles visually sit on top.
-    if conn_enabled:
+    if conn_enabled and conn["mode"] == "legacy":
         parts.append('<g id="qr-module-connectors">')
         bridge = conn.get("bridge", {})
+        connector_style = "waisted" if conn["mode"] == "liquid" else bridge.get("style", "waisted")
         bridge_overlap = max((m - draw_size) * 0.45, draw_size * bridge.get("overlap", conn["connector_overlap"]))
         for (x, y) in sorted(data_cells):
             style = style_cache[(x, y)]
@@ -1016,7 +1383,7 @@ def render_svg(spec: dict[str, Any], base_dir: str | Path | None = None) -> str:
                                     cy,
                                     col,
                                     thickness,
-                                    bridge.get("style", "waisted"),
+                                    connector_style,
                                     bridge.get("waist_ratio", 0.55),
                                     bridge.get("curve", 0.65),
                                 )
@@ -1030,7 +1397,7 @@ def render_svg(spec: dict[str, Any], base_dir: str | Path | None = None) -> str:
                                 cy,
                                 col,
                                 thickness,
-                                bridge.get("style", "waisted"),
+                                connector_style,
                                 bridge.get("waist_ratio", 0.55),
                                 bridge.get("curve", 0.65),
                             )
@@ -1061,7 +1428,7 @@ def render_svg(spec: dict[str, Any], base_dir: str | Path | None = None) -> str:
                                     bottom,
                                     col,
                                     thickness,
-                                    bridge.get("style", "waisted"),
+                                    connector_style,
                                     bridge.get("waist_ratio", 0.55),
                                     bridge.get("curve", 0.65),
                                 )
@@ -1075,7 +1442,7 @@ def render_svg(spec: dict[str, Any], base_dir: str | Path | None = None) -> str:
                                 bottom,
                                 col,
                                 thickness,
-                                bridge.get("style", "waisted"),
+                                connector_style,
                                 bridge.get("waist_ratio", 0.55),
                                 bridge.get("curve", 0.65),
                             )
@@ -1114,7 +1481,7 @@ def render_svg(spec: dict[str, Any], base_dir: str | Path | None = None) -> str:
         for x, dark in enumerate(row):
             if not dark or (x, y) in finder:
                 continue
-            if (x, y) in run_map:
+            if (x, y) in run_map or (x, y) in liquid_cells:
                 continue
             if clear_geom and s["logo"].get("remove_partial_modules", True) and _module_cell_overlaps_clear((x, y), qz, m, inset, draw_size, clear_geom, clear_mode):
                 continue

@@ -19,11 +19,17 @@ modules:
     angle: 35
   connectivity:
     enabled: true
+    mode: legacy
     horizontal_merge: 0.88
     vertical_merge: 0.74
     corner_merge: 0.36
     max_run: 4
     connector_overlap: 0.18
+    selection:
+      seed: 1
+      horizontal_probability: 1.0
+      vertical_probability: 1.0
+      run_probability: 1.0
     bridge:
       style: waisted
       max_thickness: 0.62
@@ -33,6 +39,18 @@ modules:
       connect_mixed_styles: false
     corner_fillers:
       enabled: false
+    liquid:
+      supersample: 10
+      blur_modules: 0.16
+      threshold: 0.42
+      simplify_modules: 0.035
+      min_contour_area_modules2: 0.04
+      orthogonal_bridge_width_modules: 0.0
+      fill_dense_junctions: false
+      diagonal_seed_modules: 0.0
+      diagonal_reach_modules: 0.16
+      diagonal_seed_probability: 1.0
+      seed: 1
 eyes:
   frame_shape: rounded
   pupil_shape: circle
@@ -72,6 +90,19 @@ decorations:
     colors:
     - '#F58220'
     size_modules: 0.5
+  edge_marks:
+    enabled: true
+    colors: ['#F58220', '#D84315']
+    size_modules: 1.6
+    stroke_width_modules: 0.28
+  images:
+  - id: corner-icon
+    path: icons/instagram.svg
+    x_fraction: 1.0
+    x_modules: -3.2
+    y_modules: 0.4
+    width_modules: 2.4
+    height_modules: 2.4
   logo_halo:
     enabled: false
     color: '#F58220'

@@ -6,6 +6,7 @@ def main():
         {'modules':{'shape':'rounded','scale':.88,'color':'#202124'},'eyes':{'frame_shape':'rounded','pupil_shape':'circle','color':'#F58220','pupil_color':'#F58220'}},
         {'modules':{'shape':'circle','scale':.90,'color':'#202124'},'eyes':{'frame_shape':'rounded','pupil_shape':'circle','color':'#7B2494','pupil_color':'#7B2494'}},
         {'modules':{'shape':'diamond','scale':.95,'color':'#202124'},'eyes':{'frame_shape':'rounded','pupil_shape':'square','color':'#52BEC1','pupil_color':'#52BEC1'}},
+        {'modules':{'shape':'rounded','scale':.84,'color':'#111318','connectivity':{'enabled':True,'mode':'liquid','liquid':{'diagonal_seed_modules':.10,'diagonal_reach_modules':.20,'diagonal_seed_probability':.55,'seed':1}}},'eyes':{'frame_shape':'rounded','pupil_shape':'circle','color':'#111318','pupil_color':'#FE2C55'}},
     ]
     for i,style in enumerate(styles,1):
         spec={'value':'https://example.com/test','error_correction':'H','quiet_zone':4,'background':{'color':'#FFFFFF'},'logo':{'enabled':False},'output':{'validate':True},**style}

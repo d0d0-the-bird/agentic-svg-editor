@@ -20,11 +20,11 @@ fields:
   modules:
     shape:
       type: enum
-      values: [square, rounded, circle, diamond, squircle, star, petal, soft_blob, capsule_h, capsule_v]
+      values: [square, rounded, circle, diamond, squircle, star, sparkle, petal, soft_blob, capsule_h, capsule_v]
       default: rounded
     secondary_shape:
       type: enum_or_null
-      values: [square, rounded, circle, diamond, squircle, star, petal, soft_blob, capsule_h, capsule_v]
+      values: [square, rounded, circle, diamond, squircle, star, sparkle, petal, soft_blob, capsule_h, capsule_v]
       default: null
     pattern:
       type: enum
@@ -102,6 +102,11 @@ fields:
         type: boolean
         default: false
         description: Turn on neighborhood-aware module joining.
+      mode:
+        type: enum
+        values: [legacy, liquid]
+        default: legacy
+        description: liquid replaces modules and directional bridges with unified contours extracted from a supersampled scalar field.
       horizontal_merge:
         type: number
         default: 0.85
@@ -191,6 +196,69 @@ fields:
           type: boolean
           default: false
           description: Add small interior filler shapes at dense 2x2 / L-shaped corners. Turn off for cleaner bridge-only interconnection.
+      liquid:
+        supersample:
+          type: integer
+          default: 10
+          min: 4
+          max: 24
+          description: Field resolution in samples per QR module.
+        blur_modules:
+          type: number
+          default: 0.16
+          min: 0.0
+          max: 0.35
+          description: Gaussian interaction radius in module units; larger values merge more nearby modules.
+        threshold:
+          type: number
+          default: 0.42
+          min: 0.05
+          max: 0.95
+          description: Scalar-field contour level; lower values produce broader, more connected liquid regions.
+        simplify_modules:
+          type: number
+          default: 0.035
+          min: 0.0
+          max: 0.2
+          description: Polygon simplification tolerance before fitting smooth closed SVG curves.
+        min_contour_area_modules2:
+          type: number
+          default: 0.04
+          min: 0.0
+          max: 1.0
+          description: Removes contour rings below this area; keep low because tiny light openings can be scan-critical.
+        orthogonal_bridge_width_modules:
+          type: number
+          default: 0.0
+          min: 0.0
+          max: 1.0
+          description: Constant width of pre-blur horizontal and vertical bridges; zero uses field interaction alone.
+        fill_dense_junctions:
+          type: boolean
+          default: false
+          description: Fill the shared center of complete 2x2 dark blocks to remove tiny contour holes.
+        diagonal_seed_modules:
+          type: number
+          default: 0.0
+          min: 0.0
+          max: 0.5
+          description: Half-width of rounded pre-blur diagonal path segments, in module units.
+        diagonal_reach_modules:
+          type: number
+          default: 0.16
+          min: 0.0
+          max: 0.5
+          description: Distance each diagonal path segment extends from the shared corner toward its two modules.
+        diagonal_seed_probability:
+          type: number
+          default: 1.0
+          min: 0.0
+          max: 1.0
+          description: Deterministic fraction of eligible path-continuing diagonal edges that are selected.
+        seed:
+          type: integer
+          default: 1
+          description: Deterministic seed for liquid-field selections.
   eyes:
     frame_shape:
       type: enum
@@ -388,6 +456,54 @@ fields:
         type: number
         default: 0.55
         min: 0.05
+    edge_marks:
+      description: Fixed curved strokes and accent rays placed in the outer quiet-zone area.
+      enabled:
+        type: boolean
+        default: false
+      colors:
+        type: color_list
+        default: ["#F58220"]
+      size_modules:
+        type: number
+        default: 1.6
+        min: 0.5
+      stroke_width_modules:
+        type: number
+        default: 0.28
+        min: 0.05
+    images:
+      type: image_placement_list
+      default: []
+      description: >-
+        Image or traced SVG assets placed on the canvas. Position is
+        fraction * canvas size + modules * module size, so x_fraction: 1.0 with
+        x_modules: -2.5 anchors 2.5 modules in from the right edge.
+      item:
+        id:
+          type: string
+          description: Optional semantic ID for the rendered image element.
+        path:
+          type: path
+          description: Asset path, relative to the config file.
+        x_fraction:
+          type: number
+          default: 0.0
+        y_fraction:
+          type: number
+          default: 0.0
+        x_modules:
+          type: number
+          default: 0.0
+        y_modules:
+          type: number
+          default: 0.0
+        width_modules:
+          type: number
+          min: 0.0
+        height_modules:
+          type: number
+          min: 0.0
     logo_halo:
       enabled:
         type: boolean
