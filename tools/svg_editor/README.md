@@ -259,3 +259,18 @@ export:
 `text:` is applied before ordinary operations and layout. `export.text_to_path: true` asks Inkscape to convert every live `<text>`/`<tspan>` object to paths while writing the requested output SVG. There is only one exported SVG; the YAML remains the editable source of truth for text content. No font embedding is performed.
 
 When `text_to_path` is false or omitted, text remains live SVG text.
+
+## PDF export
+
+Export one or more SVGs as a multi-page vector PDF, one page per SVG in the
+order given:
+
+```bash
+python tools/svg_editor/export_pdf.py front.svg back.svg -o flyer.pdf
+```
+
+Embedded `data:image/svg+xml` images are first inlined as nested SVG (the same
+step as `inline_svg_images.py`) so they stay vector in the PDF. Text is
+converted to paths by default; pass `--keep-text` to keep live text. Inkscape is
+found on `PATH`, then in the macOS app bundle, or can be given with
+`--inkscape PATH`. Page sizes come from each SVG.

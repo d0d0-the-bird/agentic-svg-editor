@@ -7,6 +7,7 @@ This repo contains small, inspectable tools for preparing promo-material assets.
 - `tools/vectorizer/vectorize.py` — diagnostic-first raster-to-vector conversion.
 - `tools/vectorizer/batch.py` — YAML batch vectorization with per-asset overrides.
 - `tools/svg_editor/edit.py` — ID-first SVG editing via CLI or YAML jobs.
+- `tools/svg_editor/export_pdf.py` — multi-page vector PDF export from SVGs via Inkscape.
 - `tools/qr_generator/generate.py` — styled QR generation from YAML/JSON.
 - `tools/qr_generator/configurator.py` — local HTML QR designer using the same renderer as the CLI.
 

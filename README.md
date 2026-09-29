@@ -53,6 +53,8 @@ Supported first-version operations:
 
 Every SVG write produces an edited SVG, rendered PNG preview, and JSON edit log.
 
+`export_pdf.py` exports one or more SVGs as a multi-page vector PDF via Inkscape.
+
 ### QR generator / designer
 `tools/qr_generator`
 
