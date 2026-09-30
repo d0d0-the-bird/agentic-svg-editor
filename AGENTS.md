@@ -9,6 +9,7 @@ This repo contains small, inspectable tools for preparing promo-material assets.
 - `tools/svg_editor/edit.py` — ID-first SVG editing via CLI or YAML jobs.
 - `tools/svg_editor/export_pdf.py` — multi-page vector PDF export from SVGs via Inkscape.
 - `tools/qr_generator/generate.py` — styled QR generation from YAML/JSON.
+- `tools/pipeline/run.py` — runs recipe YAMLs (ordered tool steps with inline configs).
 - `tools/qr_generator/configurator.py` — local HTML QR designer using the same renderer as the CLI.
 
 ## General workflow rules
@@ -17,6 +18,12 @@ This repo contains small, inspectable tools for preparing promo-material assets.
 3. Fix problems at the earliest broken stage.
 4. Use `--only` for incremental asset reruns where supported.
 5. Prefer deterministic tool operations over manually rewriting complex SVG/XML.
+
+## Project layout rules
+- Give each asset or composition its own folder with one recipe YAML (named after the folder) run by `tools/pipeline/run.py`.
+- Recipes write only into the folder's `generated/`; never hand-edit generated files.
+- Keep originals in the project's `sources/` and reference them by relative path.
+- Use a project-level recipe with `recipe` steps to build parts in order.
 
 ## Vectorizer rules
 - Geometry comes from visible RGB edges only.

@@ -55,6 +55,11 @@ Every SVG write produces an edited SVG, rendered PNG preview, and JSON edit log.
 
 `export_pdf.py` exports one or more SVGs as a multi-page vector PDF via Inkscape.
 
+### Pipeline runner
+`tools/pipeline`
+
+Runs a recipe YAML: the ordered tool steps that build one asset or composition, with each tool's config inline. Keep one recipe per asset/composition folder and send all outputs to its `generated/` folder.
+
 ### QR generator / designer
 `tools/qr_generator`
 
