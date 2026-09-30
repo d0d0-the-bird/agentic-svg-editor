@@ -14,6 +14,8 @@ from typing import Any
 import yaml
 from lxml import etree
 
+from inkscape import inkscape_executable
+
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
 NS = {"svg": SVG_NS, "xlink": XLINK_NS}
@@ -47,7 +49,7 @@ def render_preview(svg_path: Path, png_path: Path, max_size: int = 1800):
     """Render SVG with Inkscape, our canonical SVG renderer."""
     png_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        "inkscape", str(svg_path),
+        inkscape_executable(), str(svg_path),
         "--export-type=png",
         f"--export-filename={png_path}",
         f"--export-width={int(max_size)}",
@@ -106,7 +108,7 @@ def export_svg(tree, output_path: Path, text_to_path: bool = False):
         intermediate = Path(tmpdir) / "live-text.svg"
         write_svg(tree, intermediate)
         cmd = [
-            "inkscape", str(intermediate),
+            inkscape_executable(), str(intermediate),
             "--export-type=svg",
             "--export-text-to-path",
             f"--export-filename={output_path}",
@@ -491,14 +493,14 @@ def query_bbox_with_inkscape(tree, element_id: str):
     try:
         tree.write(str(tmp_path), encoding="utf-8", xml_declaration=True, pretty_print=False)
         cmd = [
-            "inkscape", str(tmp_path),
+            inkscape_executable(), str(tmp_path),
             f"--query-id={element_id}",
             "--query-x", "--query-y", "--query-width", "--query-height",
         ]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         except FileNotFoundError as exc:
-            raise RuntimeError("Layout/anchor features require the Inkscape CLI (`inkscape`) on PATH") from exc
+            raise RuntimeError("Layout/anchor features require the Inkscape CLI (set $INKSCAPE or put `inkscape` on PATH)") from exc
         if proc.returncode != 0:
             raise RuntimeError(f"Inkscape bbox query failed for #{element_id}: {proc.stderr.strip()}")
         vals = [line.strip() for line in proc.stdout.splitlines() if line.strip()]

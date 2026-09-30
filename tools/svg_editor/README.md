@@ -238,7 +238,7 @@ Python:
 pip install -r requirements.txt
 ```
 
-Layout/bbox features also require the **Inkscape CLI** to be installed and available as `inkscape`.
+Layout/bbox features and previews also require the **Inkscape CLI**. It is found via `$INKSCAPE`, then `inkscape` on `PATH`, then the macOS app bundle.
 
 ## YAML text source + path export
 
@@ -272,5 +272,5 @@ python tools/svg_editor/export_pdf.py front.svg back.svg -o flyer.pdf
 Embedded `data:image/svg+xml` images are first inlined as nested SVG (the same
 step as `inline_svg_images.py`) so they stay vector in the PDF. Text is
 converted to paths by default; pass `--keep-text` to keep live text. Inkscape is
-found on `PATH`, then in the macOS app bundle, or can be given with
-`--inkscape PATH`. Page sizes come from each SVG.
+found the same way as for the editor (`$INKSCAPE`, `PATH`, macOS app bundle), or
+can be given with `--inkscape PATH`. Page sizes come from each SVG.

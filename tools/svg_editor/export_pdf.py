@@ -12,28 +12,22 @@ from pathlib import Path
 from lxml import etree
 from pypdf import PdfReader, PdfWriter
 
+from inkscape import inkscape_executable
 from inline_svg_images import inline
 
 
-MACOS_INKSCAPE = Path("/Applications/Inkscape.app/Contents/MacOS/inkscape")
-
-
 def find_inkscape(explicit: str | None) -> str:
-    if explicit:
-        return explicit
-    found = shutil.which("inkscape")
-    if found:
-        return found
-    if MACOS_INKSCAPE.exists():
-        return str(MACOS_INKSCAPE)
-    raise SystemExit("Inkscape not found; install it or pass --inkscape PATH")
+    inkscape = explicit or inkscape_executable()
+    if not shutil.which(inkscape):
+        raise SystemExit("Inkscape not found; install it, set $INKSCAPE, or pass --inkscape PATH")
+    return inkscape
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inputs", nargs="+", type=Path, help="SVG files, one page each, in page order")
     parser.add_argument("-o", "--output", type=Path, required=True, help="output PDF path")
-    parser.add_argument("--inkscape", help="Inkscape executable (default: PATH, then the macOS app bundle)")
+    parser.add_argument("--inkscape", help="Inkscape executable (default: $INKSCAPE, PATH, then the macOS app bundle)")
     parser.add_argument("--keep-text", action="store_true", help="keep text as text instead of converting it to paths")
     args = parser.parse_args()
 
