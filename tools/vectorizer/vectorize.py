@@ -43,22 +43,21 @@ def parse_args():
     p.add_argument("--normal-sample-distance", type=float, default=1.5)
     p.add_argument("--fill", default=DEFAULT_FILL)
     p.add_argument("--diagnostic-dpi", type=int, default=190)
-    p.add_argument("--line-angle-deadband-deg", type=float, default=0.0,
-                   help="Deprecated compatibility option; ignored by cumulative-rotation detection.")
-    p.add_argument("--line-rotation-run", type=int, default=0,
-                   help="Deprecated compatibility option; ignored by cumulative-rotation detection.")
-    p.add_argument("--line-rotation-total-deg", type=float, default=2.5,
-                   help="Cumulative same-sign chord rotation required to declare curvature. Smaller per-step turns naturally require more points.")
-    p.add_argument("--line-min-length", type=float, default=5.0)
+    p.add_argument("--line-min-length", type=float, default=5.0,
+                   help=f"Minimum straight-line length in px (lines are only detected from {LINE_DETECT_MIN_PX:g} px).")
     p.add_argument("--line-min-points", type=int, default=5)
-    p.add_argument("--joint-refine", choices=["on", "off"], default="on",
-                   help="Refine line/Bézier joints by shortening lines to tangent-aligned points on the independent Bézier-only model.")
-    p.add_argument("--joint-tangent-threshold-deg", type=float, default=6.0,
-                   help="Maximum angle between line direction and Bézier tangent at a refined joint.")
-    p.add_argument("--joint-max-trim-px", type=float, default=8.0,
-                   help="Maximum amount a line endpoint may be shortened during tangent refinement.")
-    p.add_argument("--joint-min-line-length", type=float, default=3.0,
-                   help="Do not refine a line endpoint if the remaining line would be shorter than this.")
+    p.add_argument("--line-flatness-px", type=float, default=None,
+                   help="Largest curvature bulge a straight span may show (default: 0.3 x line threshold).")
+    p.add_argument("--corner-angle-deg", type=float, default=CORNER_ANGLE_DEG,
+                   help="Minimum turning over the corner window for a sharp corner; 180 disables corners.")
+    p.add_argument("--corner-window-px", type=float, default=CORNER_WINDOW_PX,
+                   help="Arc length on each side used to measure corner turning.")
+    # Accepted for older YAML/CLI calls; the current fitter does not use them.
+    for flag, kind, default in (("--line-angle-deadband-deg", float, 0.0), ("--line-rotation-run", int, 0),
+                                ("--line-rotation-total-deg", float, 2.5), ("--joint-tangent-threshold-deg", float, 6.0),
+                                ("--joint-max-trim-px", float, 8.0), ("--joint-min-line-length", float, 3.0)):
+        p.add_argument(flag, type=kind, default=default, help="Deprecated; ignored.")
+    p.add_argument("--joint-refine", choices=["on", "off"], default="on", help="Deprecated; ignored (joins are G1 by construction).")
     return p.parse_args()
 
 
@@ -68,7 +67,14 @@ def estimate_membership(rgb, blur_sigma, foreground_quantile, mode="distance"):
     bg = np.median(border, axis=0)
     distance = np.linalg.norm(rgb - bg[None, None, :], axis=2)
     q = np.clip(foreground_quantile, 50.0, 99.9)
-    core = distance >= np.percentile(distance, q)
+    cut = np.percentile(distance, q)
+    strong = distance[distance > 0.1 * float(distance.max())]
+    peak = float(np.percentile(strong, 90.0)) if strong.size else float(distance.max())
+    if cut < 0.25 * peak:
+        # Foreground covers less than (100 - q)% of the image, so the percentile landed in
+        # background/antialiasing; take the clearly-foreground pixels as the core instead.
+        cut = 0.5 * peak
+    core = distance >= cut
     fg = np.median(rgb[core], axis=0)
 
     if mode == "projection":
@@ -168,177 +174,18 @@ def orient_solid_left(contours, alpha, sample_distance):
     return out, normals, stats
 
 
-def bestfit_line_stats(points):
-    """Orthogonal PCA line fit and deviation statistics."""
-    c = points.mean(axis=0)
-    _, _, vh = np.linalg.svd(points - c, full_matrices=False)
-    d = vh[0]
-    normal = np.array([-d[1], d[0]])
-    errors = np.abs((points - c) @ normal)
-    return {
-        "center": c,
-        "direction": d,
-        "max_deviation": float(errors.max()) if len(errors) else 0.0,
-        "mean_deviation": float(errors.mean()) if len(errors) else 0.0,
-        "rms_deviation": float(np.sqrt(np.mean(errors**2))) if len(errors) else 0.0,
-    }
+CORNER_ANGLE_DEG = 30.0
+CORNER_WINDOW_PX = 3.0
+CORNER_CONCENTRATION = 0.65
+CORNER_STRONG_DEG = 50.0
+CORNER_WEAK_MAX_SPREAD = 1.25
+TANGENT_WINDOW_PX = 2.0
+CORNER_ROUNDING_PX = 0.6
+# Below this length a gentle curve's bulge is within pixel noise, so short
+# spans cannot be told apart from lines; they are fitted as (flat) cubics.
+LINE_DETECT_MIN_PX = 10.0
+FLAT_TANGENT_DEG = 2.0
 
-
-def bestfit_line_max_error(points):
-    return bestfit_line_stats(points)["max_deviation"]
-
-
-def _angle_delta(a, b):
-    """Shortest signed angular delta b-a in radians."""
-    return float(np.arctan2(np.sin(b-a), np.cos(b-a)))
-
-
-def _rotation_stop_offset(points, deadband_deg, run_required, total_deg):
-    """Detect gentle or strong curvature by cumulative one-direction rotation.
-
-    There is deliberately NO per-step angular deadband and NO fixed run-length
-    requirement. Every non-zero angular change contributes evidence. While the
-    sign stays the same, absolute angular changes accumulate. A sign reversal
-    resets the evidence. Once cumulative same-sign rotation reaches
-    ``total_deg``, the contour is considered curved.
-
-    This gives the desired adaptive behavior: a strong curve is detected after
-    only a few points, while a very gentle curve needs many points before enough
-    evidence accumulates.
-
-    ``deadband_deg`` and ``run_required`` remain accepted for compatibility with
-    older YAML files but are ignored.
-
-    Returns ``(stop_offset, evidence_deg, run_start_delta_index)`` or ``None``.
-    """
-    if len(points) < 4:
-        return None
-
-    total_req = np.deg2rad(max(float(total_deg), 1e-9))
-    angles = []
-    p0 = points[0]
-    for k in range(1, len(points)):
-        v = points[k] - p0
-        if np.linalg.norm(v) < 1e-12:
-            angles.append(angles[-1] if angles else 0.0)
-        else:
-            angles.append(float(np.arctan2(v[1], v[0])))
-
-    deltas = [_angle_delta(angles[i], angles[i + 1]) for i in range(len(angles) - 1)]
-    run_sign = 0
-    run_total = 0.0
-    run_start = None
-
-    for di, d in enumerate(deltas):
-        if d > 0:
-            s = 1
-        elif d < 0:
-            s = -1
-        else:
-            s = 0
-
-        if s == 0:
-            run_sign = 0
-            run_total = 0.0
-            run_start = None
-            continue
-
-        if s == run_sign:
-            run_total += abs(d)
-        else:
-            run_sign = s
-            run_total = abs(d)
-            run_start = di
-
-        if run_total >= total_req:
-            stop_offset = max(1, int(run_start) + 1)
-            return stop_offset, float(np.rad2deg(run_total)), int(run_start)
-
-    return None
-
-
-def grow_line_forward(points, start, threshold, angle_deadband_deg, rotation_run,
-                      rotation_total_deg, min_points, min_length, stop_limit=None):
-    """Grow one line candidate using BOTH fit-error and sustained-rotation stop rules."""
-    n=len(points); limit=n-1 if stop_limit is None else min(stop_limit,n-1)
-    if start>=limit: return None
-    provisional_end=None; stop_reason="end"; rotation_start=None; rotation_evidence_deg=0.0
-    for j in range(start+1,limit+1):
-        span=points[start:j+1]
-        if len(span)>=2:
-            stats=bestfit_line_stats(span)
-            if stats["max_deviation"]>threshold:
-                provisional_end=j-1; stop_reason="fit_threshold"; break
-        if len(span)>=max(min_points,4):
-            rotation_hit=_rotation_stop_offset(span,angle_deadband_deg,rotation_run,rotation_total_deg)
-            if rotation_hit is not None:
-                off,evidence_deg,run_start_di=rotation_hit
-                provisional_end=start+off
-                rotation_start=start+off+1
-                rotation_evidence_deg=evidence_deg
-                stop_reason="rotation"
-                break
-    if provisional_end is None: provisional_end=limit
-    if provisional_end<=start: return None
-    span=points[start:provisional_end+1]
-    geom=float(np.linalg.norm(np.diff(span,axis=0),axis=1).sum()) if len(span)>1 else 0.0
-    if len(span)<int(min_points) or geom<float(min_length):
-        return None
-    stats=bestfit_line_stats(span)
-    return {"start":start,"end":provisional_end,"stop_reason":stop_reason,
-            "rotation_start":rotation_start,"rotation_evidence_deg":float(rotation_evidence_deg),
-            "geometric_length":geom, **{k:v for k,v in stats.items() if k not in ('center','direction')}}
-
-
-def detect_lines_rotation_fit(points, threshold, angle_deadband_deg=0.2, rotation_run=4,
-                              rotation_total_deg=2.5, min_points=5, min_length=5.0):
-    """Detect straight spans first; curves are left as gaps for Bézier fitting.
-
-    First find any valid forward line seed. Extend only that first line backward to
-    recover its true start. Rotate the closed contour to that fixed start. Thereafter
-    line starts are never moved; scan forward, committing valid spans and skipping
-    curved starts point-by-point.
-    """
-    n=len(points)
-    if n<min_points: return [], points, {"first_seed":None}
-    seed=None
-    for s in range(n-min_points+1):
-        cand=grow_line_forward(points,s,threshold,angle_deadband_deg,rotation_run,
-                               rotation_total_deg,min_points,min_length)
-        if cand is not None:
-            seed=cand; break
-    if seed is None:
-        return [], points, {"first_seed":None}
-
-    # Backward extension for the first line only. Use reversed prefix ending at seed start.
-    first_start=seed["start"]
-    if first_start>0:
-        rev=points[:first_start+1][::-1]
-        back=grow_line_forward(rev,0,threshold,angle_deadband_deg,rotation_run,
-                               rotation_total_deg,min_points,min_length)
-        if back is not None:
-            first_start=first_start-back["end"]
-    # Rotate so this immutable first start becomes index 0.
-    rot=np.concatenate([points[first_start:],points[:first_start]],axis=0)
-    lines=[]; cursor=0
-    while cursor < n-1:
-        cand=grow_line_forward(rot,cursor,threshold,angle_deadband_deg,rotation_run,
-                               rotation_total_deg,min_points,min_length)
-        if cand is None:
-            cursor+=1
-            continue
-        # Commit raw endpoint geometry; PCA fit is only for detection/logging.
-        cand["a"]=rot[cand["start"]].copy(); cand["b"]=rot[cand["end"]].copy()
-        lines.append(cand)
-        cursor=cand["end"]
-    return lines, rot, {"first_seed_original_start":int(seed["start"]),"rotated_start_original_index":int(first_start)}
-
-
-def line_only_fit(points, threshold, min_points=5, angle_deadband_deg=0.2,
-                  rotation_run=0, rotation_total_deg=2.5, min_length=5.0):
-    lines, rotated, info=detect_lines_rotation_fit(points,threshold,angle_deadband_deg,
-        rotation_run,rotation_total_deg,min_points,min_length)
-    return lines, rotated, info
 
 def chord_parameters(points):
     ds = np.linalg.norm(np.diff(points, axis=0), axis=1)
@@ -347,54 +194,9 @@ def chord_parameters(points):
 
 
 def _unit(v):
-    v=np.asarray(v,dtype=float)
-    n=float(np.linalg.norm(v))
-    return v/max(n,1e-12)
-
-
-def fit_cubic(points, tangent_start=None, tangent_end=None):
-    """Fit a cubic with optional *forward* endpoint tangent constraints.
-
-    tangent_start/tangent_end point in contour travel direction. If omitted,
-    local data tangents are used. The endpoint positions remain fixed.
-    """
-    p0, p3 = points[0], points[-1]
-    u = chord_parameters(points)
-    if len(points) < 4:
-        d = (p3 - p0) / 3.0
-        if tangent_start is None and tangent_end is None:
-            return (p0, p0 + d, p0 + 2 * d, p3), u
-
-    if tangent_start is None:
-        t0 = _unit(points[1] - points[0])
-    else:
-        t0 = _unit(tangent_start)
-    if tangent_end is None:
-        # Backward control direction; final forward derivative is the opposite.
-        t1_back = _unit(points[-2] - points[-1])
-    else:
-        t1_back = -_unit(tangent_end)
-
-    b0 = (1-u)**3
-    b1 = 3*(1-u)**2*u
-    b2 = 3*(1-u)*u**2
-    b3 = u**3
-
-    const = (b0+b1)[:, None] * p0 + (b2+b3)[:, None] * p3
-    rhs = points - const
-    M = np.zeros((2 * len(points), 2))
-    y = rhs.reshape(-1)
-    M[0::2, 0] = b1 * t0[0]
-    M[1::2, 0] = b1 * t0[1]
-    M[0::2, 1] = b2 * t1_back[0]
-    M[1::2, 1] = b2 * t1_back[1]
-
-    sol, *_ = np.linalg.lstsq(M, y, rcond=None)
-    chord = max(float(np.linalg.norm(p3 - p0)), 1e-6)
-    cap = max(2.0 * chord, 1.0)
-    a = float(np.clip(sol[0], 0.0, cap))
-    b = float(np.clip(sol[1], 0.0, cap))
-    return (p0, p0 + a*t0, p3 + b*t1_back, p3), u
+    v = np.asarray(v, dtype=float)
+    n = float(np.linalg.norm(v))
+    return v / max(n, 1e-12)
 
 
 def cubic_eval(ctrl, u):
@@ -409,218 +211,511 @@ def cubic_eval(ctrl, u):
 
 
 def cubic_derivative(ctrl, t):
-    p0,p1,p2,p3=ctrl
-    t=float(t)
+    p0, p1, p2, p3 = ctrl
+    t = float(t)
     return 3*(1-t)**2*(p1-p0) + 6*(1-t)*t*(p2-p1) + 3*t**2*(p3-p2)
 
 
-def _angle_between_deg(a,b):
-    ua=_unit(a); ub=_unit(b)
-    dot=float(np.clip(np.dot(ua,ub),-1.0,1.0))
+def _angle_between_deg(a, b):
+    ua = _unit(a); ub = _unit(b)
+    dot = float(np.clip(np.dot(ua, ub), -1.0, 1.0))
     return float(np.degrees(np.arccos(dot)))
 
 
 def _model_at_index(points, bezier_model, k):
-    """Evaluate independent Bézier-only model and tangent at contour index k."""
-    k=int(np.clip(k,0,len(points)-1))
-    for ctrl,i,j in bezier_model:
+    """Evaluate the Bézier-only model and its tangent at contour index k (diagnostics)."""
+    k = int(np.clip(k, 0, len(points)-1))
+    for ctrl, i, j in bezier_model:
         if i <= k <= j:
-            span=points[i:j+1]
-            u=chord_parameters(span)
-            local=k-i
-            t=float(u[local])
-            return cubic_eval(ctrl,np.array([t]))[0], cubic_derivative(ctrl,t), ctrl, t, i, j
-    # Fallback to closest model segment endpoint.
-    ctrl,i,j=min(bezier_model,key=lambda s:min(abs(k-s[1]),abs(k-s[2])))
-    t=0.0 if abs(k-i)<=abs(k-j) else 1.0
-    return cubic_eval(ctrl,np.array([t]))[0], cubic_derivative(ctrl,t), ctrl, t, i, j
+            u = chord_parameters(points[i:j+1])
+            t = float(u[k-i])
+            return cubic_eval(ctrl, np.array([t]))[0], cubic_derivative(ctrl, t), ctrl, t, i, j
+    ctrl, i, j = min(bezier_model, key=lambda s: min(abs(k-s[1]), abs(k-s[2])))
+    t = 0.0 if abs(k-i) <= abs(k-j) else 1.0
+    return cubic_eval(ctrl, np.array([t]))[0], cubic_derivative(ctrl, t), ctrl, t, i, j
 
 
-def refine_lines_with_bezier_tangents(points, lines, bezier_model, tangent_threshold_deg=6.0,
-                                      max_trim_px=8.0, min_line_length=3.0):
-    """Shorten detected lines until independent Bézier tangents align at each endpoint.
-
-    Start refinement searches forward into a line; end refinement searches backward.
-    Thus lines can only shorten. Join points are taken from the independent Bézier-only
-    model, not projected onto the line.
-    """
-    refined=[]; logs=[]
-    for li,line in enumerate(lines,start=1):
-        orig_a=np.asarray(line["a"],float); orig_b=np.asarray(line["b"],float)
-        line_dir=_unit(orig_b-orig_a)
-        start_i=int(line["start"]); end_i=int(line["end"])
-        new_start_i=start_i; new_end_i=end_i
-        new_a=orig_a.copy(); new_b=orig_b.copy()
-        start_log={"status":"unchanged","angle_before_deg":None,"angle_after_deg":None,"trim_px":0.0}
-        end_log={"status":"unchanged","angle_before_deg":None,"angle_after_deg":None,"trim_px":0.0}
-
-        # Angle at original endpoints, for diagnostics.
-        _,tan0,*_=_model_at_index(points,bezier_model,start_i)
-        _,tan1,*_=_model_at_index(points,bezier_model,end_i)
-        start_log["angle_before_deg"]=_angle_between_deg(line_dir,tan0)
-        end_log["angle_before_deg"]=_angle_between_deg(line_dir,tan1)
-
-        # Start: walk forward, shortening the line from its start.
-        for k in range(start_i,end_i):
-            p,tan,*_=_model_at_index(points,bezier_model,k)
-            trim=float(np.linalg.norm(p-orig_a))
-            if trim>max_trim_px: break
-            if _angle_between_deg(line_dir,tan)<=tangent_threshold_deg:
-                remain=float(np.linalg.norm(orig_b-p))
-                if remain>=min_line_length:
-                    new_start_i=k; new_a=p
-                    start_log={"status":"refined" if k!=start_i else "already_aligned",
-                               "angle_before_deg":start_log["angle_before_deg"],
-                               "angle_after_deg":_angle_between_deg(line_dir,tan),
-                               "trim_px":trim,"contour_index":int(k),
-                               "join_point":[float(p[0]),float(p[1])]}
-                break
-
-        # End: walk backward, shortening the line from its end.
-        for k in range(end_i,new_start_i,-1):
-            p,tan,*_=_model_at_index(points,bezier_model,k)
-            trim=float(np.linalg.norm(orig_b-p))
-            if trim>max_trim_px: break
-            if _angle_between_deg(line_dir,tan)<=tangent_threshold_deg:
-                remain=float(np.linalg.norm(p-new_a))
-                if remain>=min_line_length:
-                    new_end_i=k; new_b=p
-                    end_log={"status":"refined" if k!=end_i else "already_aligned",
-                             "angle_before_deg":end_log["angle_before_deg"],
-                             "angle_after_deg":_angle_between_deg(line_dir,tan),
-                             "trim_px":trim,"contour_index":int(k),
-                             "join_point":[float(p[0]),float(p[1])]}
-                break
-
-        new_line=dict(line)
-        new_line.update({"start":int(new_start_i),"end":int(new_end_i),"a":new_a,"b":new_b,
-                         "joint_refined":True})
-        refined.append(new_line)
-        logs.append({"line":li,"start":start_log,"end":end_log,
-                     "original_start":[float(x) for x in orig_a],
-                     "original_end":[float(x) for x in orig_b],
-                     "refined_start":[float(x) for x in new_a],
-                     "refined_end":[float(x) for x in new_b]})
-    return refined,logs
+# ---------------------------------------------------------------- arc-length helpers
+def _arc(points, closed):
+    """Cumulative arc length; for closed contours the last entry is the full perimeter."""
+    pts = np.vstack([points, points[:1]]) if closed else points
+    return np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
 
 
-def bezier_only_fit(points, threshold, min_points=5):
+def _point_at(points, s, dist, closed):
+    total = s[-1]
+    pts = np.vstack([points, points[:1]]) if closed else points
+    dist = np.mod(dist, total) if closed else np.clip(dist, 0.0, total)
+    return np.column_stack([np.interp(dist, s, pts[:, 0]), np.interp(dist, s, pts[:, 1])])
+
+
+def _relative_arc(s, i, n, closed):
+    rel = s[:n] - s[i]
+    if closed:
+        total = s[-1]
+        rel = (rel + total / 2) % total - total / 2
+    return rel
+
+
+def _cross(a, b):
+    return float(a[0] * b[1] - a[1] * b[0])
+
+
+def _dir_or_none(v):
+    return None if float(np.linalg.norm(v)) < 1e-9 else _unit(v)
+
+
+def _pca_direction(pts):
+    c = pts.mean(axis=0)
+    _, _, vh = np.linalg.svd(pts - c, full_matrices=False)
+    return c, vh[0]
+
+
+def tangent_at(points, i, half_window_px=TANGENT_WINDOW_PX, closed=False, s=None):
+    """Travel-direction tangent at points[i] from a PCA line over +-half_window of arc."""
     n = len(points)
-    out = []
-    i = 0
-    while i < n - 1:
-        best = None
-        for j in range(i + min_points - 1, n):
-            span = points[i:j + 1]
-            ctrl, u = fit_cubic(span)
-            err = np.linalg.norm(span - cubic_eval(ctrl, u), axis=1)
-            if float(err.max()) <= threshold:
-                best = (j, ctrl)
+    s = _arc(points, closed) if s is None else s
+    rel = _relative_arc(s, i, n, closed)
+    half = min(half_window_px, s[-1] / 4) if closed else half_window_px
+    idx = np.nonzero(np.abs(rel) <= half)[0]
+    if len(idx) < 3:
+        lo, hi = max(0, i - 1), min(n - 1, i + 1)
+        return _unit(points[hi] - points[lo])
+    order = idx[np.argsort(rel[idx])]
+    _, d = _pca_direction(points[order])
+    if np.dot(d, points[order[-1]] - points[order[0]]) < 0:
+        d = -d
+    return _unit(d)
+
+
+# ---------------------------------------------------------------- corners
+def _turning_deg(points, s, window):
+    a = _point_at(points, s, s[:-1] - window, True)
+    b = _point_at(points, s, s[:-1] + window, True)
+    d1, d2 = points - a, b - points
+    return np.degrees(np.arctan2(d1[:, 0]*d2[:, 1] - d1[:, 1]*d2[:, 0], (d1*d2).sum(axis=1)))
+
+
+def detect_corners(points, window_px=CORNER_WINDOW_PX, min_angle_deg=CORNER_ANGLE_DEG,
+                   concentration=CORNER_CONCENTRATION):
+    """Indices of sharp corners on a closed contour.
+
+    A corner does most of its turning right at the tip: blur and antialiasing only
+    round it by ~CORNER_ROUNDING_PX, so the turning measured over +-1.25 px is already
+    most of the turning over +-``window_px``. A smooth curve, however tight, turns in
+    proportion to arc length, so the same ratio stays near 1.25 / window (~0.4).
+    Candidates need >= ``min_angle_deg`` over the window and a ratio >= ``concentration``.
+
+    Pixel stair-steps on a curve (e.g. a blocky, upscaled source) also look like
+    concentrated but weak corners; below CORNER_STRONG_DEG a corner therefore also
+    needs straight-ish arms (turning over twice the window <= CORNER_WEAK_MAX_SPREAD x).
+    """
+    if min_angle_deg >= 180 or len(points) < 8:
+        return []
+    s = _arc(points, True)
+    w = min(window_px, s[-1] / 8)
+    inner = min(1.25, w * 0.5)
+    a_outer = np.abs(_turning_deg(points, s, w))
+    a_inner = np.abs(_turning_deg(points, s, inner))
+    a_wide = np.abs(_turning_deg(points, s, min(2 * w, s[-1] / 4)))
+    # Weak candidates (min_angle..CORNER_STRONG_DEG) must have straight-ish arms: on a
+    # curve, pixel stair-steps also look like weak corners but keep turning further out.
+    strong = a_outer >= max(min_angle_deg, CORNER_STRONG_DEG)
+    straight_arms = a_wide <= CORNER_WEAK_MAX_SPREAD * a_outer
+    candidate = ((a_outer >= min_angle_deg) & (a_inner >= concentration * a_outer)
+                 & (strong | straight_arms))
+    chosen = []
+    for i in np.argsort(-a_outer):
+        if not candidate[i]:
+            continue
+        rel = _relative_arc(s, i, len(points), True)
+        if all(abs(rel[j]) > w for j in chosen):
+            chosen.append(int(i))
+    return sorted(chosen)
+
+
+def corner_vertex(points, i, inner_px=1.0, outer_px=CORNER_WINDOW_PX + 1.0, s=None):
+    """Sharp corner position: intersection of lines fitted to the two arms."""
+    s = _arc(points, True) if s is None else s
+    rel = _relative_arc(s, i, len(points), True)
+    before = points[(rel <= -inner_px) & (rel >= -outer_px)]
+    after = points[(rel >= inner_px) & (rel <= outer_px)]
+    if len(before) < 2 or len(after) < 2:
+        return points[i].copy()
+    c1, d1 = _pca_direction(before)
+    c2, d2 = _pca_direction(after)
+    cross = d1[0]*d2[1] - d1[1]*d2[0]
+    if abs(cross) < np.sin(np.radians(8)):
+        return points[i].copy()
+    t = ((c2 - c1)[0]*d2[1] - (c2 - c1)[1]*d2[0]) / cross
+    v = c1 + t * d1
+    # Antialiasing + blur round a corner by roughly CORNER_ROUNDING_PX, so the true
+    # vertex can lie at most rho * (1 / sin(interior / 2) - 1) outside the contour.
+    # Clamping to that stops curved arms from extrapolating far past the tip.
+    turn = np.radians(_angle_between_deg(d1 if np.dot(d1, points[i] - c1) > 0 else -d1,
+                                         d2 if np.dot(d2, c2 - points[i]) > 0 else -d2))
+    interior = np.pi - turn
+    if interior < np.radians(20):
+        return points[i].copy()  # near-cusp notch: extrapolated arms are unreliable
+    limit = min(CORNER_ROUNDING_PX * (1.0 / np.sin(interior / 2) - 1.0) + 0.15, 1.5)
+    shift = v - points[i]
+    dist = float(np.linalg.norm(shift))
+    return points[i] + shift * min(1.0, limit / dist) if dist > 1e-9 else points[i].copy()
+
+
+# ---------------------------------------------------------------- straight lines
+def bestfit_line_stats(points):
+    """Orthogonal PCA line fit, deviation statistics and curvature (sagitta) evidence."""
+    c, d = _pca_direction(points)
+    normal = np.array([-d[1], d[0]])
+    along = (points - c) @ d
+    errors = (points - c) @ normal
+    sagitta = 0.0
+    if len(points) >= 5:
+        coef = np.polyfit(along, errors, 2)
+        half = (along.max() - along.min()) / 2
+        sagitta = float(abs(coef[0]) * half * half)
+    abs_err = np.abs(errors)
+    return {
+        "center": c,
+        "direction": d,
+        "max_deviation": float(abs_err.max()) if len(abs_err) else 0.0,
+        "mean_deviation": float(abs_err.mean()) if len(abs_err) else 0.0,
+        "rms_deviation": float(np.sqrt(np.mean(errors**2))) if len(errors) else 0.0,
+        "sagitta": sagitta,
+    }
+
+
+def bestfit_line_max_error(points):
+    return bestfit_line_stats(points)["max_deviation"]
+
+
+def find_lines(points, threshold, flatness, min_length, min_points):
+    """Maximal straight spans of an open polyline, longest first, non-overlapping.
+
+    A span is straight when it stays within ``threshold`` of its best-fit line AND a
+    quadratic fit finds no consistent bulge larger than ``flatness``; the second test
+    keeps gentle curves (which also stay within a loose threshold) out of lines.
+    """
+    n = len(points)
+    s = _arc(points, False)
+    min_length = max(float(min_length), LINE_DETECT_MIN_PX)
+
+    def straight(i, j):
+        st = bestfit_line_stats(points[i:j+1])
+        return st["max_deviation"] <= threshold and st["sagitta"] <= flatness
+
+    candidates = []
+    for i in range(n - 1):
+        lo, hi = i + 1, n - 1
+        if not straight(i, lo):
+            continue
+        # Exponential then binary search for the longest straight span from i.
+        step = 1
+        while lo + step <= hi and straight(i, lo + step):
+            lo += step
+            step *= 2
+        hi = min(hi, lo + step)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if straight(i, mid):
+                lo = mid
             else:
-                break
-        if best is None:
-            j = min(i + 2, n - 1)
-            ctrl, _ = fit_cubic(points[i:j + 1])
-            best = (j, ctrl)
-        out.append((best[1], i, best[0]))
-        i = best[0]
+                hi = mid - 1
+        j = lo
+        if j - i + 1 >= min_points and s[j] - s[i] >= min_length:
+            candidates.append((s[j] - s[i], i, j))
+
+    taken = np.zeros(n, dtype=bool)
+    lines = []
+    for length, i, j in sorted(candidates, reverse=True):
+        if taken[i+1:j].any() or taken[i] and taken[i+1] or taken[j] and taken[j-1]:
+            continue
+        taken[i:j+1] = True
+        st = bestfit_line_stats(points[i:j+1])
+        lines.append({"start": int(i), "end": int(j), "geometric_length": float(length),
+                      "direction": st["direction"], "center": st["center"],
+                      **{k: st[k] for k in ("max_deviation", "mean_deviation", "rms_deviation", "sagitta")}})
+    return sorted(lines, key=lambda line: line["start"])
+
+
+def _project(point, center, direction):
+    return center + float((point - center) @ direction) * direction
+
+
+# ---------------------------------------------------------------- cubic fitting
+def _bernstein(u):
+    return (1-u)**3, 3*(1-u)**2*u, 3*(1-u)*u**2, u**3
+
+
+def fit_cubic(points, u=None, tangent_start=None, tangent_end=None):
+    """Least-squares cubic with fixed endpoints.
+
+    ``tangent_start`` / ``tangent_end`` (forward travel direction) constrain the
+    control points to those directions; None leaves that control point free.
+    """
+    p0, p3 = points[0], points[-1]
+    u = chord_parameters(points) if u is None else u
+    chord = float(np.linalg.norm(p3 - p0))
+    t0 = None if tangent_start is None else _unit(tangent_start)
+    t1 = None if tangent_end is None else _unit(tangent_end)
+
+    def fallback():
+        a = max(chord, 1e-6) / 3.0
+        d = _unit(p3 - p0) if chord > 1e-9 else np.array([1.0, 0.0])
+        c1 = p0 + a * (t0 if t0 is not None else d)
+        c2 = p3 - a * (t1 if t1 is not None else d)
+        return (p0.copy(), c1, c2, p3.copy()), u
+
+    free = (t0 is None) * 2 + (t1 is None) * 2 + (t0 is not None) + (t1 is not None)
+    if len(points) < 3 or len(points) * 2 < free + 1:
+        return fallback()
+    b0, b1, b2, b3 = _bernstein(u)
+    rhs = points - b0[:, None] * p0 - b3[:, None] * p3
+    cols = []
+    if t0 is None:
+        cols += [np.column_stack([b1, 0*b1]), np.column_stack([0*b1, b1])]
+    else:
+        rhs = rhs - b1[:, None] * p0
+        cols.append(b1[:, None] * t0)
+    if t1 is None:
+        cols += [np.column_stack([b2, 0*b2]), np.column_stack([0*b2, b2])]
+    else:
+        rhs = rhs - b2[:, None] * p3
+        cols.append(-b2[:, None] * t1)
+    M = np.column_stack([c.reshape(-1) for c in cols])
+    sol, *_ = np.linalg.lstsq(M, rhs.reshape(-1), rcond=None)
+    k = 0
+    if t0 is None:
+        c1 = sol[0:2].copy(); k = 2
+    else:
+        a = float(sol[0]); k = 1
+        if not np.isfinite(a) or a < 1e-3 * max(chord, 1e-6) or a > 3 * max(chord, 1.0):
+            return fallback()
+        c1 = p0 + a * t0
+    if t1 is None:
+        c2 = sol[k:k+2].copy()
+    else:
+        b = float(sol[k])
+        if not np.isfinite(b) or b < 1e-3 * max(chord, 1e-6) or b > 3 * max(chord, 1.0):
+            return fallback()
+        c2 = p3 - b * t1
+    return (p0.copy(), c1, c2, p3.copy()), u
+
+
+def _reparameterize(ctrl, points, u):
+    """One Newton-Raphson step moving each parameter toward the closest curve point."""
+    p0, p1, p2, p3 = ctrl
+    q = cubic_eval(ctrl, u)
+    d1 = 3 * (((1-u)**2)[:, None] * (p1-p0) + (2*(1-u)*u)[:, None] * (p2-p1) + (u**2)[:, None] * (p3-p2))
+    d2 = 6 * (((1-u))[:, None] * (p2 - 2*p1 + p0) + u[:, None] * (p3 - 2*p2 + p1))
+    diff = q - points
+    num = (diff * d1).sum(axis=1)
+    den = (d1 * d1).sum(axis=1) + (diff * d2).sum(axis=1)
+    step = np.where(np.abs(den) > 1e-12, num / np.where(np.abs(den) > 1e-12, den, 1.0), 0.0)
+    out = np.clip(u - step, 0.0, 1.0)
+    out[0], out[-1] = 0.0, 1.0
     return out
 
 
-def point_to_segment_distance(points, a, b):
-    ab = b - a
-    ab2 = float(ab @ ab)
-    if ab2 < 1e-12:
-        return np.linalg.norm(points - a, axis=1)
-    u = np.clip(((points-a) @ ab) / ab2, 0.0, 1.0)
-    q = a + u[:, None] * ab
-    return np.linalg.norm(points - q, axis=1)
+def _fit_error(ctrl, points, u):
+    d = np.linalg.norm(cubic_eval(ctrl, u) - points, axis=1)
+    k = int(np.argmax(d))
+    return float(d[k]), k
 
 
-def bezier_gap_fit(points, threshold, min_points=5, tangent_start=None, tangent_end=None):
-    """Fit cubic Béziers to a gap, constraining only the external joint tangents."""
-    n=len(points); out=[]; i=0
-    while i<n-1:
-        best=None
-        for j in range(i+min_points-1,n):
-            span=points[i:j+1]
-            ts=tangent_start if i==0 else None
-            te=tangent_end if j==n-1 else None
-            ctrl,u=fit_cubic(span, tangent_start=ts, tangent_end=te)
-            err=np.linalg.norm(span-cubic_eval(ctrl,u),axis=1)
-            if float(err.max())<=threshold:
-                best=(j,ctrl)
-            else:
+def _best_cubic(points, t0, t1, iterations=10):
+    """Cubic fit refined by alternating Newton reparameterization and refitting."""
+    ctrl, u = fit_cubic(points, None, t0, t1)
+    err, k = _fit_error(ctrl, points, u)
+    for _ in range(iterations):
+        u2 = _reparameterize(ctrl, points, u)
+        ctrl2, _ = fit_cubic(points, u2, t0, t1)
+        err2, k2 = _fit_error(ctrl2, points, u2)
+        if err2 >= err - 1e-4:
+            break
+        ctrl, u, err, k = ctrl2, u2, err2, k2
+    return ctrl, err, k
+
+
+def fit_curve_span(points, tolerance, t0=None, t1=None, base=0):
+    """Schneider-style recursive fit of an open span; joins share one tangent (G1).
+
+    Returns [(ctrl, i, j)] with indices relative to ``points`` plus ``base``.
+    """
+    n = len(points)
+    if n <= 2 or float(np.linalg.norm(points[-1] - points[0])) < 1e-9 and n <= 3:
+        ctrl, _ = fit_cubic(points[[0, -1]] if n >= 2 else points, None, t0, t1)
+        return [(ctrl, base, base + n - 1)]
+    if float(np.linalg.norm(points[-1] - points[0])) < 1e-9:
+        # Closed span (start == end): split at the point farthest from the seam first.
+        k = int(np.argmax(np.linalg.norm(points - points[0], axis=1)))
+        k = int(np.clip(k, 1, n - 2))
+    else:
+        ctrl, err, k = _best_cubic(points, t0, t1)
+        if err <= tolerance or n < 4:
+            return [(ctrl, base, base + n - 1)]
+        k = int(np.clip(k, 1, n - 2))
+    tm = tangent_at(points, k)
+    return (fit_curve_span(points[:k+1], tolerance, t0, tm, base)
+            + fit_curve_span(points[k:], tolerance, tm, t1, base + k))
+
+
+def merge_curve_segments(points, segments, tolerance, t0=None, t1=None, base=0):
+    """Greedily merge neighbouring cubics when one cubic still fits their union."""
+    segs = list(segments)
+    changed = True
+    while changed and len(segs) > 1:
+        changed = False
+        for a in range(len(segs) - 1):
+            (_, i, _), (_, _, j) = segs[a], segs[a + 1]
+            start_tan = t0 if a == 0 else _dir_or_none(segs[a][0][1] - segs[a][0][0])
+            end_tan = t1 if a + 1 == len(segs) - 1 else _dir_or_none(segs[a + 1][0][3] - segs[a + 1][0][2])
+            span = points[i - base:j - base + 1]
+            if float(np.linalg.norm(span[-1] - span[0])) < 1e-9:
+                continue
+            ctrl, err, _ = _best_cubic(span, start_tan, end_tan)
+            if err <= tolerance:
+                segs[a:a + 2] = [(ctrl, i, j)]
+                changed = True
                 break
-        if best is None:
-            j=min(i+2,n-1)
-            ts=tangent_start if i==0 else None
-            te=tangent_end if j==n-1 else None
-            ctrl,_=fit_cubic(points[i:j+1], tangent_start=ts, tangent_end=te)
-            best=(j,ctrl)
-        out.append((best[1],i,best[0])); i=best[0]
-    return out
+    return segs
 
 
-def _cyclic_gap_points(points, start_idx, end_idx, start_point, end_point):
-    """Points from a line end to the next line start, wrapping around the contour."""
-    n=len(points); start_idx=int(start_idx); end_idx=int(end_idx)
-    if end_idx >= start_idx:
-        core=points[start_idx:end_idx+1].copy()
-        index_base=start_idx
-    else:
-        core=np.concatenate([points[start_idx:],points[:end_idx+1]],axis=0).copy()
-        index_base=start_idx
-    if len(core)<2:
-        core=np.vstack([start_point,end_point])
-    else:
-        core[0]=start_point; core[-1]=end_point
-    return core,index_base
+def fit_open_run(points, line_threshold, bezier_threshold, flatness, line_min_length, line_min_points,
+                 t_start=None, t_end=None, find_straight=True):
+    """Lines + G1 cubics for an open run of contour points (endpoints fixed)."""
+    n = len(points)
+    lines = find_lines(points, line_threshold, flatness, line_min_length, line_min_points) if find_straight else []
+    segments, emitted_lines = [], []
+    for line in lines:
+        i, j = line["start"], line["end"]
+        a = points[i] if i == 0 else _project(points[i], line["center"], line["direction"])
+        b = points[j] if j == n - 1 else _project(points[j], line["center"], line["direction"])
+        line.update({"a": a, "b": b})
+        emitted_lines.append(line)
+
+    cursor, cursor_point, prev_tan = 0, points[0], t_start
+    for line in emitted_lines + [None]:
+        stop = n - 1 if line is None else line["start"]
+        stop_point = points[-1] if line is None else line["a"]
+        next_tan = t_end if line is None else _unit(line["b"] - line["a"])
+        if stop > cursor or float(np.linalg.norm(stop_point - cursor_point)) > 1e-7:
+            gap = points[cursor:stop + 1].copy()
+            if len(gap) < 2:
+                gap = np.vstack([cursor_point, stop_point])
+            gap[0], gap[-1] = cursor_point, stop_point
+            curves = fit_curve_span(gap, bezier_threshold, prev_tan, next_tan, cursor)
+            curves = merge_curve_segments(gap, curves, bezier_threshold, prev_tan, next_tan, cursor)
+            for ctrl, gi, gj in curves:
+                p0, p1, p2, p3 = ctrl
+                chord = float(np.linalg.norm(p3 - p0))
+                bulge = max(abs(_cross(_unit(p3 - p0), c - p0)) for c in (p1, p2)) if chord > 1e-9 else 0.0
+                # A flat cubic becomes a line only if its end tangents already follow the
+                # chord; otherwise the swap would break the smooth join with its neighbours.
+                aligned = chord > 1e-9 and all(
+                    np.linalg.norm(v) < 1e-9 or _angle_between_deg(v, p3 - p0) <= FLAT_TANGENT_DEG
+                    for v in (p1 - p0, p3 - p2))
+                if chord >= line_min_length and bulge <= flatness and aligned:
+                    segments.append(("L", (p0, p3), gi, gj))
+                else:
+                    segments.append(("B", ctrl, gi, gj))
+        if line is not None:
+            segments.append(("L", (line["a"], line["b"]), line["start"], line["end"]))
+            cursor, cursor_point, prev_tan = line["end"], line["b"], _unit(line["b"] - line["a"])
+    return segments, emitted_lines
 
 
 def hybrid_fit(points, line_threshold, bezier_threshold, angle_deadband_deg=0.2, rotation_run=4,
                rotation_total_deg=2.5, line_min_points=5, line_min_length=5.0,
                joint_refine=True, joint_tangent_threshold_deg=6.0,
-               joint_max_trim_px=8.0, joint_min_line_length=3.0):
-    lines, rot, detect_info = line_only_fit(points, line_threshold, line_min_points,
-        angle_deadband_deg, rotation_run, rotation_total_deg, line_min_length)
-    beziers_full = bezier_only_fit(rot, bezier_threshold)
-    original_lines=[dict(x) for x in lines]
-    joint_logs=[]
-    if joint_refine and lines and beziers_full:
-        lines,joint_logs=refine_lines_with_bezier_tangents(
-            rot,lines,beziers_full,joint_tangent_threshold_deg,joint_max_trim_px,joint_min_line_length)
+               joint_max_trim_px=8.0, joint_min_line_length=3.0,
+               corner_angle_deg=CORNER_ANGLE_DEG, corner_window_px=CORNER_WINDOW_PX, line_flatness_px=None):
+    """Fit a closed contour with sharp corners, straight lines and G1-continuous cubics.
 
-    # Assemble the closed contour in strict cyclic order:
-    # line -> tangent-constrained Bézier gap -> next line -> ... -> first line.
-    # This also handles the wraparound joint rather than leaving SVG Z to make a
-    # hidden straight closing segment.
-    final=[]
-    if lines:
-        lines=sorted(lines,key=lambda x:x["start"])
-        m=len(lines)
-        for idx,line in enumerate(lines):
-            i,j=line["start"],line["end"]
-            final.append(("L",(line["a"],line["b"]),i,j))
-            nxt=lines[(idx+1)%m]
-            gap,base_idx=_cyclic_gap_points(rot,j,nxt["start"],line["b"],nxt["a"])
-            # If two lines touch exactly, there is no geometric gap to fit.
-            if len(gap)>=2 and float(np.linalg.norm(gap[-1]-gap[0]))>1e-7:
-                ts=_unit(line["b"]-line["a"])
-                te=_unit(nxt["b"]-nxt["a"])
-                for ctrl,gi,gj in bezier_gap_fit(gap,bezier_threshold,tangent_start=ts,tangent_end=te):
-                    final.append(("B",ctrl,(base_idx+gi)%len(rot),(base_idx+gj)%len(rot)))
+    1. Corners: concentrated turning (see detect_corners), snapped to the
+       intersection of their arms so antialiasing does not round them.
+    2. The contour is split into runs between corners (or kept as one loop).
+    3. In each run, straight spans become lines; the rest is fitted with cubics
+       (Newton reparameterization, split at the worst point, merged back where
+       possible). Neighbouring cubics share a tangent and cubics next to a line
+       take the line's direction, so joins are smooth unless they are corners.
+
+    The rotation/joint arguments are accepted for compatibility and unused.
+    """
+    flatness = float(line_flatness_px) if line_flatness_px is not None else max(0.03, 0.3 * float(line_threshold))
+    n = len(points)
+    s = _arc(points, True)
+    corners = detect_corners(points, corner_window_px, corner_angle_deg)
+    combined, lines = [], []
+
+    if corners:
+        shift = corners[0]
+        rot = np.roll(points, -shift, axis=0)
+        cidx = [(c - shift) % n for c in corners]
+        s_rot = _arc(rot, True)
+        vertices = [corner_vertex(rot, c, s=s_rot) for c in cidx]
+        for k, i in enumerate(cidx):
+            j = cidx[k + 1] if k + 1 < len(cidx) else n
+            run = np.vstack([rot[i:j], rot[j % n][None, :]]) if j < n else np.vstack([rot[i:], rot[:1]])
+            run = run.copy()
+            v0, v1 = vertices[k], vertices[(k + 1) % len(cidx)]
+            # Drop the rounded points hugging each corner; the vertex replaces them.
+            rs = _arc(run, False)
+            keep = [0] + [m for m in range(1, len(run) - 1) if 0.9 <= rs[m] <= rs[-1] - 0.9] + [len(run) - 1]
+            run = run[keep]
+            run[0], run[-1] = v0, v1
+            segs, run_lines = fit_open_run(run, line_threshold, bezier_threshold, flatness,
+                                           line_min_length, line_min_points)
+            index_map = np.array(keep) + i
+            for typ, data, gi, gj in segs:
+                combined.append((typ, data, int(index_map[min(gi, len(keep) - 1)] % n), int(index_map[min(gj, len(keep) - 1)] % n)))
+            for line in run_lines:
+                line = dict(line, start=int(index_map[line["start"]] % n), end=int(index_map[line["end"]] % n))
+                lines.append(line)
     else:
-        # No straight spans: fit the whole loop as Béziers. Include the first point
-        # again so the closing geometry is also modeled instead of delegated to SVG Z.
-        closed=np.vstack([rot,rot[0]])
-        for ctrl,gi,gj in bezier_gap_fit(closed,bezier_threshold):
-            final.append(("B",ctrl,gi%len(rot),gj%len(rot)))
+        loop_lines = find_lines(points, line_threshold, flatness, line_min_length, line_min_points)
+        if loop_lines:
+            # Start the loop at the longest line so it is not cut by the seam; the last
+            # curve then ends on that line's direction, keeping the seam smooth.
+            shift = max(loop_lines, key=lambda l: l["geometric_length"])["start"]
+            rot = np.roll(points, -shift, axis=0)
+            closed = np.vstack([rot, rot[:1]])
+            first = find_lines(closed, line_threshold, flatness, line_min_length, line_min_points)
+            if first and first[0]["start"] == 0:
+                t_start = None
+                t_end = _unit(_project(closed[first[0]["end"]], first[0]["center"], first[0]["direction"]) - closed[0])
+            else:
+                t_start = t_end = tangent_at(rot, 0, closed=True)
+            segs, run_lines = fit_open_run(closed, line_threshold, bezier_threshold, flatness,
+                                           line_min_length, line_min_points, t_start, t_end)
+            combined = [(typ, data, gi % n, gj % n) for typ, data, gi, gj in segs]
+            lines = [dict(l, start=l["start"] % n, end=l["end"] % n) for l in run_lines]
+        else:
+            rot = points
+            closed = np.vstack([rot, rot[:1]])
+            seam = tangent_at(rot, 0, closed=True)
+            curves = fit_curve_span(closed, bezier_threshold, seam, seam)
+            curves = merge_curve_segments(closed, curves, bezier_threshold, seam, seam)
+            combined = [("B", ctrl, gi % n, gj % n) for ctrl, gi, gj in curves]
 
-    return {"line_only":original_lines,"refined_lines":lines,"bezier_only":beziers_full,
-            "line_threshold":float(line_threshold),"bezier_threshold":float(bezier_threshold),
-            "kept_lines":lines,"combined":final,"rotated_points":rot,
-            "line_detection":detect_info,"joint_refinement":joint_logs}
+    # Independent Bézier-only model (diagnostic 03 / 04).
+    closed = np.vstack([rot, rot[:1]])
+    seam = tangent_at(rot, 0, closed=True)
+    bezier_only = [(ctrl, gi, min(gj, n - 1)) for ctrl, gi, gj in fit_curve_span(closed, bezier_threshold, seam, seam)]
+    for line in lines:
+        line["a"], line["b"] = np.asarray(line["a"]), np.asarray(line["b"])
+
+    log_lines = [{k: v for k, v in line.items() if k not in ("direction", "center")} for line in lines]
+    return {"line_only": log_lines, "refined_lines": log_lines, "bezier_only": bezier_only,
+            "line_threshold": float(line_threshold), "bezier_threshold": float(bezier_threshold),
+            "kept_lines": log_lines, "combined": combined, "rotated_points": rot,
+            "corners": [int(c) for c in corners],
+            "corner_points": [points[c].copy() for c in corners],
+            "corner_vertices": [corner_vertex(points, c, s=s) for c in corners],
+            "line_detection": {"flatness_px": flatness, "corner_angle_deg": corner_angle_deg,
+                               "corner_window_px": corner_window_px},
+            "joint_refinement": []}
 
 
 def prepare_axis(ax, rgb, title):
@@ -699,34 +794,18 @@ def save_bezier_only(path, rgb, fits, dpi):
     plt.close(fig)
 
 
-def save_joint_refinement(path, rgb, fits, dpi):
+def save_corners(path, rgb, fits, dpi):
     fig, ax = plt.subplots(figsize=(7, 7))
-    prepare_axis(ax, rgb, "Joint tangent refinement")
+    prepare_axis(ax, rgb, "Corners (x) and sharpened vertices (o)")
     for fit in fits:
-        # Independent Bézier-only model is the guide used to choose shortened line endpoints.
-        for ctrl,_,_ in fit["bezier_only"]:
-            c=cubic_eval(ctrl,np.linspace(0,1,120))
-            ax.plot(c[:,0],c[:,1],color=BEZIER_COLOR,linewidth=1.6,alpha=0.32)
-        # Original detector lines, faint dashed.
-        for line in fit["line_only"]:
-            a,b=line["a"],line["b"]
-            ax.plot([a[0],b[0]],[a[1],b[1]],color=LINE_COLOR,linewidth=2.0,alpha=0.23,linestyle="--")
-        # Refined lines, joint points, and tangent comparison arrows.
-        rot=fit["rotated_points"]
-        model=fit["bezier_only"]
-        for line in fit.get("refined_lines",[]):
-            a,b=line["a"],line["b"]; ld=_unit(b-a)
-            draw_visible(ax,[a[0],b[0]],[a[1],b[1]],LINE_COLOR,3.3)
-            for point,k in ((a,line["start"]),(b,line["end"])):
-                _,guide_tan,*_=_model_at_index(rot,model,k)
-                gt=_unit(guide_tan)
-                ax.scatter([point[0]],[point[1]],s=44,facecolor="white",edgecolor="black",zorder=8)
-                scale=5.0
-                ax.arrow(point[0],point[1],ld[0]*scale,ld[1]*scale,width=0.10,
-                         head_width=1.0,head_length=1.3,color=LINE_COLOR,length_includes_head=True,zorder=9)
-                ax.arrow(point[0],point[1],gt[0]*scale,gt[1]*scale,width=0.08,
-                         head_width=0.9,head_length=1.2,color=BEZIER_COLOR,length_includes_head=True,zorder=9,alpha=0.9)
-    fig.savefig(path,dpi=dpi,bbox_inches="tight")
+        for typ, data, _, _ in fit["combined"]:
+            c = np.array([data[0], data[1]]) if typ == "L" else cubic_eval(data, np.linspace(0, 1, 60))
+            ax.plot(c[:, 0], c[:, 1], color=LINE_COLOR if typ == "L" else BEZIER_COLOR, linewidth=1.4, alpha=0.6)
+        for raw, vertex in zip(fit.get("corner_points", []), fit.get("corner_vertices", [])):
+            ax.plot([raw[0], vertex[0]], [raw[1], vertex[1]], color="black", linewidth=1.0)
+            ax.scatter([raw[0]], [raw[1]], marker="x", s=46, color="black", zorder=8)
+            ax.scatter([vertex[0]], [vertex[1]], s=40, facecolor="white", edgecolor="black", zorder=9)
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -912,17 +991,16 @@ def main():
     contours, normals, orientation_stats = orient_solid_left(
         contours, alpha, args.normal_sample_distance
     )
-    fits = [hybrid_fit(points, line_threshold, bezier_threshold, args.line_angle_deadband_deg,
-                       args.line_rotation_run, args.line_rotation_total_deg,
-                       args.line_min_points, args.line_min_length,
-                       args.joint_refine == "on", args.joint_tangent_threshold_deg,
-                       args.joint_max_trim_px, args.joint_min_line_length) for points in contours]
+    fits = [hybrid_fit(points, line_threshold, bezier_threshold,
+                       line_min_points=args.line_min_points, line_min_length=args.line_min_length,
+                       corner_angle_deg=args.corner_angle_deg, corner_window_px=args.corner_window_px,
+                       line_flatness_px=args.line_flatness_px) for points in contours]
 
     p0 = args.output_dir / "00_all_contours.png"
     p1 = args.output_dir / "01_points_normals.png"
     p2 = args.output_dir / "02_line_only.png"
     p3 = args.output_dir / "03_bezier_only.png"
-    p4j = args.output_dir / "04_joint_refinement.png"
+    p4j = args.output_dir / "04_corners.png"
     p4 = args.output_dir / "05_combined.png"
     p5 = args.output_dir / "06_final_filled.png"
     svg = args.output_dir / "final.svg"
@@ -930,13 +1008,13 @@ def main():
     contact = args.output_dir / "pipeline_contact_sheet.png"
     metadata = args.output_dir / "metadata.json"
     line_log = args.output_dir / "line_fit_log.json"
-    joint_log = args.output_dir / "joint_refinement_log.json"
+    joint_log = args.output_dir / "corner_log.json"
 
     save_all_contours(p0, rgb, contour_records, args.keep_contour, args.diagnostic_dpi)
     save_points(p1, rgb, contours, normals, args.diagnostic_dpi)
     save_line_only(p2, rgb, fits, args.diagnostic_dpi)
     save_bezier_only(p3, rgb, fits, args.diagnostic_dpi)
-    save_joint_refinement(p4j, rgb, fits, args.diagnostic_dpi)
+    save_corners(p4j, rgb, fits, args.diagnostic_dpi)
     save_combined(p4, rgb, fits, args.diagnostic_dpi)
     save_final(svg, p5, w, h, fits, args.fill)
     save_objects(objects_svg, w, h, selected_records, contours, fits, args.fill, object_groups)
@@ -946,9 +1024,6 @@ def main():
         "legacy_threshold_px": args.threshold,
         "line_threshold_px": line_threshold,
         "bezier_threshold_px": bezier_threshold,
-        "angle_deadband_deg": args.line_angle_deadband_deg,
-        "rotation_run": args.line_rotation_run,
-        "rotation_total_deg": args.line_rotation_total_deg,
         "min_line_length_px": args.line_min_length,
         "min_line_points": args.line_min_points,
         "contours": []
@@ -967,17 +1042,17 @@ def main():
     line_log_data["max_committed_line_deviation_px"] = all_max
     line_log.write_text(json.dumps(line_log_data, indent=2), encoding="utf-8")
 
-    joint_log_data = {
-        "enabled": args.joint_refine == "on",
-        "tangent_threshold_deg": args.joint_tangent_threshold_deg,
-        "max_trim_px": args.joint_max_trim_px,
-        "min_remaining_line_length_px": args.joint_min_line_length,
+    corner_log_data = {
+        "corner_angle_deg": args.corner_angle_deg,
+        "corner_window_px": args.corner_window_px,
         "contours": [
-            {"contour": ci+1, "joints": fit.get("joint_refinement", [])}
+            {"contour": ci + 1,
+             "corners": [{"contour_point": [float(v) for v in raw], "vertex": [float(v) for v in vertex]}
+                         for raw, vertex in zip(fit["corner_points"], fit["corner_vertices"])]}
             for ci, fit in enumerate(fits)
         ],
     }
-    joint_log.write_text(json.dumps(joint_log_data, indent=2), encoding="utf-8")
+    joint_log.write_text(json.dumps(corner_log_data, indent=2), encoding="utf-8")
 
     meta = {
         "input": str(args.input),
@@ -993,15 +1068,11 @@ def main():
         "threshold": args.threshold,
         "line_threshold": line_threshold,
         "bezier_threshold": bezier_threshold,
-        "line_angle_deadband_deg": args.line_angle_deadband_deg,
-        "line_rotation_run": args.line_rotation_run,
-        "line_rotation_total_deg": args.line_rotation_total_deg,
         "line_min_length": args.line_min_length,
         "line_min_points": args.line_min_points,
-        "joint_refine": args.joint_refine,
-        "joint_tangent_threshold_deg": args.joint_tangent_threshold_deg,
-        "joint_max_trim_px": args.joint_max_trim_px,
-        "joint_min_line_length": args.joint_min_line_length,
+        "line_flatness_px": args.line_flatness_px,
+        "corner_angle_deg": args.corner_angle_deg,
+        "corner_window_px": args.corner_window_px,
         "max_committed_line_deviation_px": all_max,
         "min_contour_length": args.min_contour_length,
         "max_contours": args.max_contours,

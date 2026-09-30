@@ -58,18 +58,54 @@ python tools/vectorizer/vectorize.py input.png --output-dir out
 
 Useful options:
 - `--threshold` (legacy shared tolerance fallback)
-- `--line-threshold` / `--bezier-threshold`
+- `--line-threshold` / `--bezier-threshold` (max deviation in px for lines / cubics)
 - `--min-contour-length`
 - `--max-contours`
 - `--keep-contour`
 - `--blur-sigma`
 - `--foreground-quantile`
 - `--membership-mode`
-- `--line-rotation-total-deg`
-- `--line-min-length`
-- `--line-min-points`
-- `--joint-refine`
+- `--line-min-length` / `--line-min-points`
+- `--line-flatness-px` (largest bulge a straight span may show; default 0.3 x line threshold)
+- `--corner-angle-deg` (minimum corner turning, default 30; `180` disables corners)
+- `--corner-window-px` (arc length per side used to measure corners, default 3)
 - `--fill`
+
+`--line-rotation-total-deg`, `--line-angle-deadband-deg`, `--line-rotation-run`
+and the `--joint-*` options are still accepted from older YAML but ignored.
+
+## How contours are fitted
+Each traced contour becomes lines and cubic Béziers:
+
+1. **Corners**: a point is a corner when it turns at least `--corner-angle-deg`
+   over +-`--corner-window-px` and most of that turning happens right at the tip
+   (a smooth curve turns in proportion to arc length instead). Corners weaker than
+   50 degrees also need straight-ish sides, so pixel stair-steps on a curve do not
+   count. The corner point is moved to where the two sides meet, re-sharpening what
+   antialiasing rounded, by at most what that rounding can explain.
+2. **Lines**: spans of at least 10 px that stay within `--line-threshold` of a
+   straight line and show no consistent bulge above `--line-flatness-px`. Shorter
+   straight bits are fitted exactly as flat cubics.
+3. **Curves**: everything else is fitted Schneider-style: least-squares cubics with
+   Newton reparameterization, split at the worst point until within
+   `--bezier-threshold`, then neighbouring cubics are merged back where one fits.
+4. **Smooth joins**: neighbouring cubics share one tangent (from a local fit), and
+   cubics next to a line take the line's direction, so the outline only bends at
+   detected corners.
+
+`04_corners.png` shows detected corners (x) and their sharpened vertices (o);
+`corner_log.json` lists them.
+
+## Benchmark
+```bash
+python tools/vectorizer/benchmark.py
+python tools/vectorizer/benchmark.py --impl old/vectorize.py --impl tools/vectorizer/vectorize.py --real path/to/crops
+```
+
+Scores the fitter on synthetic shapes with exact outlines (circles, polygons,
+rounded shapes, Lato glyphs rendered at 16x) and on real crops: max/mean deviation,
+line and curve counts, kinks (joins that bend where the outline is smooth) and
+sharp corners kept. Run it before and after changing the fitting code.
 
 ## Batch YAML
 The batch runner accepts defaults plus per-asset overrides. Example:
@@ -81,7 +117,6 @@ defaults:
   bezier_error_px: 0.75
   min_contour_length: 5
   max_contours: 0
-  line_rotation_total_deg: 2.5
   line_min_points: 3
 assets:
   - name: note_purple
@@ -102,7 +137,6 @@ So this works naturally:
 defaults:
   line_error_px: 0.25
   bezier_error_px: 0.75
-  line_rotation_total_deg: 2.5
 
 assets:
   - name: note_teal_top_right
@@ -113,7 +147,7 @@ assets:
     input: extracted_rgb/blob_coral_right.png
     fill: "#FDB8A9"
     bezier_error_px: 1.0
-    line_rotation_total_deg: 3.0
+    corner_angle_deg: 45
 ```
 
 You can then rerun only that asset:

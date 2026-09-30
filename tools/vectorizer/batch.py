@@ -72,6 +72,9 @@ def main():
             "joint_tangent_threshold_deg": "--joint-tangent-threshold-deg",
             "joint_max_trim_px": "--joint-max-trim-px",
             "joint_min_line_length": "--joint-min-line-length",
+            "line_flatness_px": "--line-flatness-px",
+            "corner_angle_deg": "--corner-angle-deg",
+            "corner_window_px": "--corner-window-px",
         }
         for key, flag in mapping.items():
             if key in params and params[key] is not None:
