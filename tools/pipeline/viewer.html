@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recipe Viewer</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e3e1dc;
+  --accent: #d9480f; --accent-soft: rgba(217, 72, 15, 0.14); --sel: #fff1e8; --stage: #e9e7e2;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a; --panel: #202024; --ink: #ececef; --muted: #9a9aa2; --line: #313136;
+    --accent: #ff8a4c; --accent-soft: rgba(255, 138, 76, 0.18); --sel: #33261f; --stage: #121214;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  display: grid; grid-template-rows: auto 1fr; }
+header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+header .path { color: var(--muted); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+main { display: grid; grid-template-columns: 250px 1fr 320px; min-height: 0; }
+aside { background: var(--panel); overflow: auto; min-height: 0; }
+aside.left { border-right: 1px solid var(--line); padding: 8px 0; }
+aside.right { border-left: 1px solid var(--line); padding: 10px 12px; }
+.proj { margin: 4px 8px 14px; }
+.proj-head { padding: 8px 10px; border-radius: 8px; cursor: pointer; background: var(--bg); border: 1px solid var(--line); }
+.proj-head:hover { border-color: var(--accent); }
+.proj-head .title { font-weight: 700; font-size: 14px; }
+.proj-head .desc { color: var(--muted); font-size: 11px; margin-top: 2px; }
+.proj-body { margin: 6px 0 0 10px; padding-left: 8px; border-left: 2px solid var(--line); }
+.group-label { margin: 10px 0 3px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.group-label:first-child { margin-top: 2px; }
+.urow { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
+.urow:hover { background: var(--bg); }
+.urow .chev { width: 16px; height: 16px; flex: none; color: var(--muted); font-size: 16px; line-height: 16px; text-align: center; transition: transform .12s; }
+.urow .chev.open { transform: rotate(90deg); }
+.urow .chev:hover { color: var(--accent); }
+.urow .uname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.urow .kind { margin-left: auto; flex: none; font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 10px; padding: 0 6px; }
+.steps { margin: 1px 0 4px 13px; padding-left: 9px; border-left: 1px dashed var(--line); }
+.srow { display: flex; align-items: center; gap: 7px; padding: 3px 6px; border-radius: 5px; cursor: pointer; font-size: 12px; color: var(--muted); }
+.srow:hover { background: var(--bg); color: var(--ink); }
+.srow .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.srow .sid { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srow .tool { margin-left: auto; flex: none; white-space: nowrap; font: 10px var(--mono); opacity: .75; }
+.proj.solo { margin-top: 0; margin-bottom: 2px; }
+.selected { background: var(--sel) !important; color: var(--ink) !important; }
+.missing .sid { text-decoration: line-through; opacity: .6; }
+.section-sep { margin: 16px 12px 8px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+#pv-stage { position: relative; overflow: hidden; background: var(--stage); min-height: 0; cursor: grab; touch-action: none; }
+#pv-stage.dragging { cursor: grabbing; }
+#pv-wrap { position: absolute; left: 0; top: 0; transform-origin: 0 0; box-shadow: 0 2px 18px rgba(0,0,0,.18); background: #fff; }
+#pv-wrap svg, #pv-wrap img { display: block; }
+#pv-stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+#pv-hl { position: absolute; pointer-events: none; border: 2px solid var(--accent); background: var(--accent-soft); border-radius: 3px; display: none; }
+#pv-hl span { position: absolute; left: -2px; top: -22px; background: var(--accent); color: #fff; font: 11px var(--mono); padding: 2px 6px; border-radius: 3px; white-space: nowrap; }
+#pv-tools { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 6px; z-index: 2; }
+#pv-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.gallery { position: absolute; inset: 0; overflow: auto; padding: 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; align-content: start; cursor: default; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; cursor: pointer; }
+.tile:hover { border-color: var(--accent); }
+.tile .thumb { height: 130px; display: flex; align-items: center; justify-content: center; background: #fff; border-radius: 4px; overflow: hidden; }
+.tile .thumb img { max-width: 100%; max-height: 100%; }
+.tile .cap { margin-top: 6px; font-size: 11px; font-family: var(--mono); color: var(--muted); word-break: break-all; }
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 0 6px; font-weight: 600; }
+h2:first-child { margin-top: 0; }
+.file-title { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+.meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.link { color: var(--accent); cursor: pointer; }
+.link:hover { text-decoration: underline; }
+.item { display: flex; gap: 8px; align-items: center; padding: 5px; border-radius: 6px; cursor: pointer; }
+.item:hover, .item.active { background: var(--sel); }
+.item .th { width: 42px; height: 42px; flex: none; background: #fff; border: 1px solid var(--line); border-radius: 4px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.item .th img { max-width: 100%; max-height: 100%; }
+.item .txt { min-width: 0; }
+.item .name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .sub { font-size: 11px; color: var(--muted); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge { display: inline-block; font: 10px var(--mono); padding: 1px 5px; border-radius: 3px; background: var(--accent-soft); color: var(--accent); margin-left: 4px; }
+.el { font: 12px var(--mono); padding: 2px 5px; border-radius: 4px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.el:hover, .el.active { background: var(--sel); }
+.el small { color: var(--muted); }
+input[type=search] { width: 100%; font: inherit; padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.notes { color: var(--muted); font-size: 12px; margin: 4px 0 0 16px; padding: 0; }
+.error { color: #c92a2a; padding: 16px; white-space: pre-wrap; font-family: var(--mono); }
+#pv-pages { position: absolute; inset: 0; overflow: auto; cursor: default; touch-action: pan-x pan-y; }
+.pages-col { display: flex; flex-direction: column; align-items: center; gap: 28px; padding: 24px 16px 90px; min-width: min-content; }
+.page { margin: 0; width: var(--page-w, 800px); }
+.page-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
+.page-head b { color: var(--ink); font-size: 13px; }
+.page-head span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11px; }
+.page-head button { margin-left: auto; flex: none; }
+.page img { display: block; width: 100%; height: auto; background: #fff; box-shadow: 0 2px 18px rgba(0,0,0,.22); }
+#pv-pagebar { position: absolute; right: 10px; bottom: 10px; z-index: 5; display: flex; gap: 6px; align-items: center;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 5px 7px; box-shadow: 0 2px 12px rgba(0,0,0,.2); }
+#pv-pagebar .num { font: 12px var(--mono); color: var(--muted); min-width: 52px; text-align: center; }
+.item .open { margin-left: auto; flex: none; border: 0; background: none; color: var(--accent); font-size: 16px; padding: 4px 8px; }
+.mobile-only { display: none; }
+#pv-backdrop { display: none; }
+@media (max-width: 800px) {
+  body { font-size: 14px; }
+  header { gap: 8px; padding: 8px 10px; }
+  header .path { display: none; }
+  header h1 { display: none; }
+  #pv-reload { margin-left: auto; }
+  .mobile-only { display: inline-block; }
+  button { padding: 6px 11px; }
+  main { grid-template-columns: 1fr; }
+  aside.left, aside.right { position: fixed; top: 0; bottom: 0; z-index: 30; width: min(88vw, 360px);
+    transition: transform .2s ease; box-shadow: 0 0 24px rgba(0,0,0,.3); }
+  aside.left { left: 0; transform: translateX(-105%); }
+  aside.right { right: 0; transform: translateX(105%); }
+  body.show-tree aside.left, body.show-panel aside.right { transform: none; }
+  body.show-tree #pv-backdrop, body.show-panel #pv-backdrop { display: block; position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.35); }
+  .urow, .srow, .el { padding-top: 8px; padding-bottom: 8px; }
+  .gallery { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); padding: 10px; gap: 10px; }
+  #pv-tools button { padding: 8px 14px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <button class="mobile-only" id="pv-open-tree">Recipes</button>
+  <h1>Recipe Viewer</h1>
+  <div class="path" id="pv-base"></div>
+  <button id="pv-reload" title="Rescan recipes and reload the current file">Reload</button>
+  <button class="mobile-only" id="pv-open-panel">Details</button>
+</header>
+<main>
+  <aside class="left" id="pv-tree"></aside>
+  <section id="pv-stage">
+    <div id="pv-wrap"></div>
+    <div id="pv-hl"><span></span></div>
+    <div id="pv-empty">Select a recipe or step</div>
+    <div id="pv-tools"><button id="pv-fit">Fit</button><button id="pv-one">1:1</button></div>
+  </section>
+  <aside class="right" id="pv-panel"></aside>
+</main>
+<div id="pv-backdrop"></div>
+<script>
+const $ = (sel, el = document) => el.querySelector(sel);
+const h = (tag, attrs = {}, ...kids) => {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (v !== undefined && v !== null) el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined) el.append(kid.nodeType ? kid : String(kid));
+  return el;
+};
+const fileUrl = (key) => "/file/" + key.split("/").map(encodeURIComponent).join("/");
+const base = (key) => key.split("/").pop();
+const VIEWABLE_IMG = [".svg", ".png", ".jpg", ".jpeg"];
+
+const canHover = matchMedia("(hover: hover)").matches;
+const narrow = () => matchMedia("(max-width: 800px)").matches;
+const closeDrawers = () => document.body.classList.remove("show-tree", "show-panel");
+let graph = null;
+let cur = { unit: null, step: null, file: null };
+let view = { scale: 1, x: 0, y: 0, w: 0, h: 0 };
+let svgIds = new Map();
+let hlId = null;
+
+async function loadGraph() {
+  const res = await fetch("/api/graph");
+  const data = await res.json();
+  if (!res.ok) { $("#pv-panel").replaceChildren(h("div", { class: "error" }, data.error || "error")); return; }
+  const prev = graph;
+  graph = data;
+  $("#pv-base").textContent = graph.base;
+  renderTree();
+  if (!cur.unit) selectUnit(graph.root);
+  else if (cur.pages && prev && projectPages(cur.unit).some((pg) => prev.files[pg.file]?.mtime !== graph.files[pg.file]?.mtime)) { renderPages(); renderPanel(); }
+  else if (cur.file && prev && prev.files[cur.file]?.mtime !== graph.files[cur.file]?.mtime) showFile(cur.file, cur.unit, cur.step, true);
+  else renderPanel();
+}
+
+/* ---------- tree ---------- */
+const TOOL_COLORS = { extract: "#4dabf7", vectorize: "#9775fa", compose: "#20c997", qr: "#fab005", caption: "#ffa94d",
+  "embed-images": "#f06595", "svg-edit": "#ff6b6b", "export-pdf": "#868e96", recipe: "#adb5bd" };
+const expanded = new Set();
+function unitKind(key) {
+  if (key.includes("/assets/")) return "asset";
+  if (key.includes("/compositions/")) return "composition";
+  return graph.units[key].children.length ? "project" : "recipe";
+}
+function parentsOf(key) {
+  const out = [];
+  let changed = true, target = key;
+  while (changed) {
+    changed = false;
+    for (const [k, u] of Object.entries(graph.units)) if (u.children.includes(target)) { out.push(k); target = k; changed = true; break; }
+  }
+  return out;
+}
+function renderTree() {
+  if (cur.unit) { expanded.add(cur.unit); parentsOf(cur.unit).forEach((k) => expanded.add(k)); }
+  const tree = $("#pv-tree");
+  tree.replaceChildren();
+  graph.roots.forEach((root, i) => {
+    if (i === 1) tree.append(h("div", { class: "section-sep" }, "Referenced recipes"));
+    const unit = graph.units[root];
+    if (unit.children.length) tree.append(renderProject(root));
+    else tree.append(h("div", { class: "proj solo" }, renderUnitRow(root)));
+  });
+}
+function renderProject(key) {
+  const unit = graph.units[key];
+  const body = h("div", { class: "proj-body" });
+  const plural = { asset: "Assets", composition: "Compositions", recipe: "Recipes", project: "Projects" };
+  let lastLabel = null;
+  const label = (text) => { if (text !== lastLabel) body.append(h("div", { class: "group-label" }, text)); lastLabel = text; };
+  for (const step of unit.steps) {
+    if (step.tool === "recipe") {
+      // A step wrapping one same-named recipe is labelled by what it builds, so consecutive ones share a heading.
+      const single = step.children.length === 1 && graph.units[step.children[0]].name === step.id;
+      label(single ? plural[unitKind(step.children[0])] : step.id);
+      for (const child of step.children) body.append(graph.units[child].children.length ? renderProject(child) : renderUnitRow(child));
+    } else {
+      label("Steps");
+      body.append(renderStepRow(key, step));
+    }
+  }
+  const sel = cur.unit === key && !cur.step;
+  return h("div", { class: "proj" },
+    h("div", { class: "proj-head" + (sel ? " selected" : ""), onclick: () => { closeDrawers(); selectUnit(key); } },
+      h("div", { class: "title" }, unit.name), unit.description ? h("div", { class: "desc" }, unit.description) : null),
+    body);
+}
+function renderUnitRow(key) {
+  const unit = graph.units[key];
+  const open = expanded.has(key);
+  const sel = cur.unit === key && !cur.step;
+  const wrap = h("div");
+  wrap.append(h("div", { class: "urow" + (sel ? " selected" : ""), title: unit.description || key,
+      onclick: () => { expanded.add(key); closeDrawers(); selectUnit(key); } },
+    h("span", { class: "chev" + (open ? " open" : ""), title: open ? "Collapse" : "Expand",
+      onclick: (e) => { e.stopPropagation(); open ? expanded.delete(key) : expanded.add(key); renderTree(); } }, "›"),
+    h("span", { class: "uname" }, unit.name),
+    h("span", { class: "kind" }, `${unitKind(key)} · ${unit.steps.length}`)));
+  if (open) wrap.append(h("div", { class: "steps" }, unit.steps.map((s) => renderStepRow(key, s))));
+  return wrap;
+}
+function renderStepRow(key, step) {
+  const missing = step.primary && !graph.files[step.primary]?.exists;
+  const sel = cur.unit === key && cur.step === step.id;
+  return h("div", { class: "srow" + (sel ? " selected" : "") + (missing ? " missing" : ""), title: missing ? "not built yet" : "",
+      onclick: () => { closeDrawers(); selectStep(key, step.id); } },
+    h("span", { class: "dot", style: `background:${TOOL_COLORS[step.tool] || "#adb5bd"}` }),
+    h("span", { class: "sid" }, step.id), h("span", { class: "tool" }, step.tool));
+}
+
+/* ---------- selection ---------- */
+function defaultFile(unitKey) {
+  const unit = graph.units[unitKey];
+  const steps = [...unit.steps].reverse();
+  const pick = (exts) => steps.find((s) => s.primary && exts.some((e) => s.primary.endsWith(e)) && graph.files[s.primary]?.exists);
+  const step = pick([".svg", ".png"]) || pick([".pdf"]);
+  return step ? { file: step.primary, step: step.id } : null;
+}
+function selectUnit(key) {
+  const d = defaultFile(key);
+  const unit = graph.units[key];
+  if (unit.children.length) return showPages(key);
+  if (d) return showFile(d.file, key, d.step);
+  cur = { unit: key, step: null, file: null };
+  showGallery([]);
+}
+function selectStep(unitKey, stepId) {
+  const step = graph.units[unitKey].steps.find((s) => s.id === stepId);
+  if (step.primary) return showFile(step.primary, unitKey, stepId);
+  cur = { unit: unitKey, step: stepId, file: null };
+  if (step.children.length) {
+    showGallery(step.children.map((c) => ({ file: defaultFile(c)?.file, label: graph.units[c].name, onclick: () => selectUnit(c) })));
+  } else {
+    showGallery(step.outputs.map((f) => ({ file: f, label: f.split("/").slice(-2).join("/"), onclick: () => showFile(f, unitKey, stepId) })));
+  }
+}
+
+/* ---------- stage ---------- */
+function clearStage() {
+  $("#pv-wrap").replaceChildren();
+  $("#pv-wrap").style.display = "none";
+  $("#pv-stage").querySelectorAll(".gallery, iframe, #pv-pages, #pv-pagebar").forEach((el) => el.remove());
+  $("#pv-empty").style.display = "none";
+  $("#pv-tools").style.display = "none";
+  svgIds = new Map();
+  highlight(null);
+}
+function showGallery(tiles) {
+  clearStage();
+  renderTree();
+  renderPanel();
+  const grid = h("div", { class: "gallery" });
+  for (const t of tiles) {
+    const thumb = t.file && VIEWABLE_IMG.some((e) => t.file.endsWith(e)) ? h("img", { src: fileUrl(t.file), loading: "lazy" }) : h("span", { class: "meta" }, t.file ? base(t.file) : "not built");
+    grid.append(h("div", { class: "tile", onclick: t.onclick }, h("div", { class: "thumb" }, thumb), h("div", { class: "cap" }, t.label)));
+  }
+  if (!tiles.length) grid.append(h("div", { class: "meta" }, "No outputs."));
+  $("#pv-stage").append(grid);
+}
+async function showFile(fileKey, unitKey, stepId, keepView = false) {
+  const producer = graph.files[fileKey]?.producer;
+  if (producer && !stepId && (!unitKey || producer.unit === unitKey)) { unitKey = producer.unit; stepId = producer.step; }
+  cur = { unit: unitKey, step: stepId, file: fileKey };
+  const prevView = { ...view };
+  clearStage();
+  renderTree();
+  renderPanel();
+  const info = graph.files[fileKey];
+  if (!info?.exists) { $("#pv-empty").textContent = "Not built yet: " + fileKey; $("#pv-empty").style.display = "flex"; return; }
+  const wrap = $("#pv-wrap");
+  if (fileKey.endsWith(".pdf")) {
+    $("#pv-stage").append(h("iframe", { src: fileUrl(fileKey) }));
+    return;
+  }
+  if (fileKey.endsWith(".svg")) {
+    const text = await (await fetch(fileUrl(fileKey))).text();
+    if (cur.file !== fileKey) return;
+    const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+    const svg = doc.documentElement;
+    if (svg.nodeName !== "svg" || doc.querySelector("parsererror")) { $("#pv-empty").textContent = "Could not parse SVG"; $("#pv-empty").style.display = "flex"; return; }
+    sanitize(svg);
+    const size = svgSize(svg);
+    svg.setAttribute("width", size.w); svg.setAttribute("height", size.h);
+    wrap.append(document.importNode(svg, true));
+    view.w = size.w; view.h = size.h;
+    for (const el of wrap.querySelectorAll("[id]")) if (el !== wrap.firstChild) svgIds.set(el.id, el);
+  } else {
+    const img = h("img", { src: fileUrl(fileKey) });
+    wrap.append(img);
+    await img.decode().catch(() => {});
+    view.w = img.naturalWidth; view.h = img.naturalHeight;
+  }
+  wrap.style.display = "block";
+  $("#pv-tools").style.display = "flex";
+  if (keepView) { view.scale = prevView.scale; view.x = prevView.x; view.y = prevView.y; applyView(); } else fit();
+  renderPanel();
+}
+function sanitize(root) {
+  root.querySelectorAll("script, foreignObject").forEach((el) => el.remove());
+  for (const el of [root, ...root.querySelectorAll("*")]) {
+    for (const attr of [...el.attributes]) {
+      if (/^on/i.test(attr.name) || /^\s*javascript:/i.test(attr.value)) el.removeAttribute(attr.name);
+    }
+  }
+}
+function svgSize(svg) {
+  const num = (v) => (v && !String(v).includes("%") ? parseFloat(v) : NaN);
+  const vb = (svg.getAttribute("viewBox") || "").split(/[\s,]+/).map(Number);
+  let w = num(svg.getAttribute("width")), h = num(svg.getAttribute("height"));
+  if (!(w > 0) && vb.length === 4) w = vb[2];
+  if (!(h > 0) && vb.length === 4) h = vb[3];
+  return { w: w > 0 ? w : 800, h: h > 0 ? h : 600 };
+}
+
+/* ---------- zoom / pan ---------- */
+function applyView() {
+  $("#pv-wrap").style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+  if (hlId) highlight(hlId);
+}
+function fit() {
+  const st = $("#pv-stage").getBoundingClientRect();
+  view.scale = Math.min((st.width - 40) / view.w, (st.height - 40) / view.h);
+  view.x = (st.width - view.w * view.scale) / 2;
+  view.y = (st.height - view.h * view.scale) / 2;
+  applyView();
+}
+function zoomAt(factor, cx, cy) {
+  const s = Math.min(40, Math.max(0.02, view.scale * factor));
+  view.x = cx - (cx - view.x) * (s / view.scale);
+  view.y = cy - (cy - view.y) * (s / view.scale);
+  view.scale = s;
+  applyView();
+}
+const stage = $("#pv-stage");
+stage.addEventListener("wheel", (e) => {
+  if (!$("#pv-wrap").firstChild || $("#pv-wrap").style.display === "none") return;
+  e.preventDefault();
+  const r = stage.getBoundingClientRect();
+  zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
+const pointers = new Map();
+let gesture = null;
+function stagePoint(e) { const r = stage.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+function beginGesture() {
+  const pts = [...pointers.values()];
+  const moved = gesture?.moved || false;
+  if (pts.length === 1) gesture = { mode: "pan", p0: pts[0], vx: view.x, vy: view.y, moved };
+  else if (pts.length >= 2) {
+    const [a, b] = pts;
+    gesture = { mode: "pinch", d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, m0: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+      s0: view.scale, vx: view.x, vy: view.y, moved: true };
+  } else gesture = null;
+}
+stage.addEventListener("pointerdown", (e) => {
+  if (e.button > 0 || e.target.closest("#pv-tools, .gallery, iframe, #pv-pages, #pv-pagebar") || $("#pv-wrap").style.display === "none") return;
+  try { stage.setPointerCapture(e.pointerId); } catch {}
+  pointers.set(e.pointerId, stagePoint(e));
+  beginGesture();
+  stage.classList.add("dragging");
+});
+stage.addEventListener("pointermove", (e) => {
+  if (!pointers.has(e.pointerId) || !gesture) return;
+  pointers.set(e.pointerId, stagePoint(e));
+  const pts = [...pointers.values()];
+  if (gesture.mode === "pan") {
+    const dx = pts[0].x - gesture.p0.x, dy = pts[0].y - gesture.p0.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) gesture.moved = true;
+    view.x = gesture.vx + dx; view.y = gesture.vy + dy;
+  } else if (pts.length >= 2) {
+    const [a, b] = pts;
+    const s = Math.min(40, Math.max(0.02, gesture.s0 * Math.hypot(a.x - b.x, a.y - b.y) / gesture.d0));
+    const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    view.x = m.x - (gesture.m0.x - gesture.vx) * (s / gesture.s0);
+    view.y = m.y - (gesture.m0.y - gesture.vy) * (s / gesture.s0);
+    view.scale = s;
+  }
+  applyView();
+});
+function endPointer(e) {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.delete(e.pointerId);
+  const tapped = gesture && !gesture.moved && pointers.size === 0 && e.type === "pointerup";
+  if (pointers.size) beginGesture(); else { gesture = null; stage.classList.remove("dragging"); }
+  if (tapped) pickAt(document.elementFromPoint(e.clientX, e.clientY));
+}
+stage.addEventListener("pointerup", endPointer);
+stage.addEventListener("pointercancel", endPointer);
+$("#pv-fit").onclick = fit;
+$("#pv-one").onclick = () => { const r = stage.getBoundingClientRect(); zoomAt(1 / view.scale, r.width / 2, r.height / 2); };
+
+/* ---------- highlight ---------- */
+function highlight(id) {
+  hlId = id;
+  const box = $("#pv-hl");
+  const el = id ? svgIds.get(id) : null;
+  document.querySelectorAll(".item.active, .el.active").forEach((n) => n.classList.remove("active"));
+  if (!el) { box.style.display = "none"; return; }
+  document.querySelectorAll(`[data-el="${CSS.escape(id)}"]`).forEach((n) => n.classList.add("active"));
+  const r = el.getBoundingClientRect(), s = stage.getBoundingClientRect();
+  Object.assign(box.style, { display: "block", left: `${r.left - s.left}px`, top: `${r.top - s.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+  box.firstChild.textContent = "#" + id;
+}
+function pickAt(target) {
+  const wrap = $("#pv-wrap");
+  if (!wrap.contains(target)) return highlight(null);
+  // Innermost element with an ID; clicking again on the same spot steps out to the next ancestor.
+  const chain = [];
+  for (let el = target; el && el !== wrap; el = el.parentNode) if (el.id && el !== wrap.firstChild) chain.push(el.id);
+  const at = chain.indexOf(hlId);
+  const fallback = chain.length ? chain[at >= 0 && at + 1 < chain.length ? at + 1 : 0] : null;
+  highlight(fallback);
+  const row = fallback && document.querySelector(`[data-el="${CSS.escape(fallback)}"]`);
+  if (row) row.scrollIntoView({ block: "nearest" });
+}
+
+/* ---------- side panel ---------- */
+function madeFrom() {
+  if (!cur.unit || !cur.step) return [];
+  const unit = graph.units[cur.unit];
+  const out = [], seen = new Set();
+  const walk = (stepId) => {
+    const step = unit.steps.find((s) => s.id === stepId);
+    if (!step) return;
+    for (const inp of step.inputs) {
+      const prod = graph.files[inp.file]?.producer;
+      if (prod && prod.unit === cur.unit && prod.step !== stepId) { walk(prod.step); continue; }
+      const k = inp.file + "|" + inp.element;
+      if (!seen.has(k)) { seen.add(k); out.push(inp); }
+    }
+  };
+  walk(cur.step);
+  return out;
+}
+function fileItem(fileKey, sub, element, open) {
+  const thumb = VIEWABLE_IMG.some((e) => fileKey.endsWith(e)) && graph.files[fileKey]?.exists ? h("img", { src: fileUrl(fileKey), loading: "lazy" }) : null;
+  const hasEl = element && svgIds.has(element);
+  const tap = () => {
+    if (canHover) return open();
+    if (hasEl) { highlight(hlId === element ? null : element); if (narrow() && hlId) closeDrawers(); }
+    else open();
+  };
+  return h("div", { class: "item", "data-el": element || "", onclick: tap,
+    onmouseenter: () => canHover && hasEl && highlight(element), onmouseleave: () => canHover && hasEl && highlight(null) },
+    h("div", { class: "th" }, thumb),
+    h("div", { class: "txt" },
+      h("div", { class: "name" }, base(fileKey), element ? h("span", { class: "badge", title: hasEl ? "element in this SVG" : "element not found in this SVG" }, "#" + element) : null),
+      h("div", { class: "sub" }, sub)),
+    canHover ? null : h("button", { class: "open", title: "Open", onclick: (e) => { e.stopPropagation(); closeDrawers(); open(); } }, "›"));
+}
+function renderPanel() {
+  const panel = $("#pv-panel");
+  panel.replaceChildren();
+  if (!graph || !cur.unit) return;
+  const unit = graph.units[cur.unit];
+  panel.append(h("h2", {}, "Recipe"));
+  panel.append(h("div", { class: "file-title" }, cur.unit));
+  if (unit.description) panel.append(h("div", { class: "meta" }, unit.description));
+  if (unit.notes.length) panel.append(h("ul", { class: "notes" }, unit.notes.map((n) => h("li", {}, n))));
+
+  if (cur.pages) {
+    const pages = projectPages(cur.unit);
+    panel.append(h("h2", {}, `Pages (${pages.length})`));
+    pages.forEach((pg, i) => {
+      const exists = graph.files[pg.file]?.exists;
+      panel.append(h("div", { class: "item", "data-page": i, onclick: () => { closeDrawers(); scrollToPage(i); } },
+        h("div", { class: "th" }, exists ? h("img", { src: fileUrl(pg.file), loading: "lazy" }) : null),
+        h("div", { class: "txt" }, h("div", { class: "name" }, `${i + 1} · ${pg.name}`), h("div", { class: "sub" }, pg.file)),
+        h("button", { class: "open", title: "Inspect", onclick: (e) => { e.stopPropagation(); closeDrawers(); showFile(pg.file, null, null); } }, "›")));
+    });
+  }
+  if (cur.file) {
+    const info = graph.files[cur.file];
+    panel.append(h("h2", {}, "Showing"));
+    panel.append(h("div", { class: "file-title" }, cur.file));
+    panel.append(h("div", { class: "meta" },
+      cur.step ? `step ${cur.step} · ` : "", info?.exists ? `${(info.size / 1024).toFixed(0)} KB · ` : "missing · ",
+      h("a", { class: "link", href: fileUrl(cur.file), target: "_blank" }, "open raw")));
+
+    const inputs = madeFrom();
+    if (inputs.length) {
+      panel.append(h("h2", {}, "Made from"));
+      for (const inp of inputs) {
+        const prod = graph.files[inp.file]?.producer;
+        const sub = prod ? `${graph.units[prod.unit].name} · ${prod.step}` : inp.role === "source" || !prod ? `${inp.role} · ${inp.file}` : inp.file;
+        panel.append(fileItem(inp.file, sub, inp.element, () => { closeDrawers(); prod ? showFile(inp.file, prod.unit, prod.step) : showFile(inp.file, null, null); }));
+      }
+    }
+    const users = info?.consumers || [];
+    if (users.length) {
+      panel.append(h("h2", {}, "Used by"));
+      for (const u of users) {
+        const step = graph.units[u.unit].steps.find((s) => s.id === u.step);
+        const el = step.inputs.find((i) => i.file === cur.file)?.element;
+        panel.append(h("div", { class: "item", onclick: () => { closeDrawers(); selectStep(u.unit, u.step); } },
+          h("div", { class: "txt" }, h("div", { class: "name" }, graph.units[u.unit].name, el ? h("span", { class: "badge" }, "#" + el) : null),
+            h("div", { class: "sub" }, `${u.step} · ${step.tool}`))));
+      }
+    }
+    if (svgIds.size) {
+      panel.append(h("h2", {}, `Elements (${svgIds.size})`));
+      const list = h("div");
+      const search = h("input", { type: "search", placeholder: "Filter IDs…" });
+      const fill = () => {
+        const q = search.value.toLowerCase();
+        list.replaceChildren();
+        let n = 0;
+        for (const [id, el] of svgIds) {
+          if (q && !id.toLowerCase().includes(q)) continue;
+          if (++n > 400) { list.append(h("div", { class: "meta" }, "…refine the filter")); break; }
+          list.append(h("div", { class: "el", "data-el": id, onmouseenter: () => canHover && highlight(id), onmouseleave: () => canHover && highlight(null),
+            onclick: () => { closeDrawers(); zoomTo(id); } }, id, " ", h("small", {}, el.nodeName)));
+        }
+      };
+      search.addEventListener("input", fill);
+      fill();
+      panel.append(search, list);
+    }
+  }
+}
+function zoomTo(id) {
+  const el = svgIds.get(id);
+  if (!el) return;
+  const r = el.getBoundingClientRect(), s = stage.getBoundingClientRect();
+  const factor = Math.min(8, 0.6 * Math.min(s.width / Math.max(r.width, 1), s.height / Math.max(r.height, 1)));
+  view.scale *= factor;
+  view.x = s.width / 2 - ((r.left + r.width / 2 - s.left) - view.x) * factor;
+  view.y = s.height / 2 - ((r.top + r.height / 2 - s.top) - view.y) * factor;
+  applyView();
+  highlight(id);
+}
+
+/* ---------- project pages (the project's document view) ---------- */
+let pageZoom = 1;
+function projectPages(key) {
+  const pages = [];
+  const collect = (k) => {
+    for (const step of graph.units[k].steps) {
+      if (step.tool === "export-pdf") step.inputs.forEach((i) => pages.push({ file: i.file }));
+      step.children.forEach(collect);
+    }
+  };
+  collect(key);
+  if (pages.length) {
+    // Name pages after the recipe that produced them (e.g. "front", "back").
+    return pages.map((p) => ({ ...p, name: graph.files[p.file]?.producer ? graph.units[graph.files[p.file].producer.unit].name : base(p.file) }));
+  }
+  return graph.units[key].children.map((k) => ({ file: defaultFile(k)?.file, name: graph.units[k].name })).filter((p) => p.file);
+}
+function showPages(key) {
+  cur = { unit: key, step: null, file: null, pages: true };
+  clearStage();
+  renderTree();
+  const box = h("div", { id: "pv-pages" }, h("div", { class: "pages-col" }));
+  const bar = h("div", { id: "pv-pagebar" },
+    h("button", { title: "Zoom out", onclick: () => { pageZoom = Math.max(0.2, pageZoom / 1.25); applyPageZoom(); } }, "−"),
+    h("button", { onclick: () => { pageZoom = 1; applyPageZoom(); } }, "Fit width"),
+    h("button", { title: "Zoom in", onclick: () => { pageZoom = Math.min(6, pageZoom * 1.25); applyPageZoom(); } }, "+"),
+    h("span", { class: "num" }));
+  stage.append(box, bar);
+  box.addEventListener("scroll", updatePageNum);
+  box.addEventListener("wheel", (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    pageZoom = Math.min(6, Math.max(0.2, pageZoom * Math.exp(-e.deltaY * 0.004)));
+    applyPageZoom(e.clientY - box.getBoundingClientRect().top);
+  }, { passive: false });
+  let pinch = null;
+  box.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 2) return;
+    const [a, b] = e.touches;
+    pinch = { d0: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1, z0: pageZoom };
+  }, { passive: true });
+  box.addEventListener("touchmove", (e) => {
+    if (!pinch || e.touches.length !== 2) return;
+    e.preventDefault();
+    const [a, b] = e.touches;
+    pageZoom = Math.min(6, Math.max(0.2, pinch.z0 * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / pinch.d0));
+    applyPageZoom((a.clientY + b.clientY) / 2 - box.getBoundingClientRect().top);
+  }, { passive: false });
+  box.addEventListener("touchend", (e) => { if (e.touches.length < 2) pinch = null; });
+  renderPages();
+  renderPanel();
+}
+function pageBaseWidth() {
+  const box = $("#pv-pages");
+  return Math.max(200, Math.min(box.clientWidth - 32, 1000));
+}
+function applyPageZoom(anchorY) {
+  const box = $("#pv-pages");
+  if (!box) return;
+  const rel = anchorY === undefined ? box.clientHeight / 2 : anchorY;
+  const pos = (box.scrollTop + rel) / Math.max(box.scrollHeight, 1);
+  box.style.setProperty("--page-w", `${Math.round(pageBaseWidth() * pageZoom)}px`);
+  box.scrollTop = pos * box.scrollHeight - rel;
+  updatePageNum();
+}
+function renderPages() {
+  const col = $("#pv-pages .pages-col");
+  const pages = projectPages(cur.unit);
+  col.replaceChildren(...pages.map((pg, i) => h("figure", { class: "page", "data-i": i },
+    h("div", { class: "page-head" }, h("b", {}, `${i + 1}`), pg.name, h("span", {}, pg.file),
+      h("button", { onclick: () => showFile(pg.file, null, null) }, "Inspect")),
+    graph.files[pg.file]?.exists ? h("img", { src: fileUrl(pg.file) + `?v=${graph.files[pg.file].mtime}`, alt: pg.name, onload: updatePageNum }) : h("div", { class: "meta" }, "Not built yet"))));
+  if (!pages.length) col.append(h("div", { class: "meta" }, "No pages: this recipe has no export-pdf step or child recipes."));
+  applyPageZoom(0);
+}
+function scrollToPage(i) {
+  const pg = document.querySelector(`#pv-pages .page[data-i="${i}"]`);
+  if (pg) $("#pv-pages").scrollTo({ top: pg.offsetTop - 16, behavior: "smooth" });
+}
+function updatePageNum() {
+  const box = $("#pv-pages");
+  if (!box) return;
+  const pages = [...box.querySelectorAll(".page")];
+  const num = $("#pv-pagebar .num");
+  if (!pages.length) { num.textContent = ""; return; }
+  const mid = box.getBoundingClientRect().top + box.clientHeight / 3;
+  let idx = 0;
+  pages.forEach((pg, i) => { if (pg.getBoundingClientRect().top <= mid) idx = i; });
+  num.textContent = `${idx + 1} / ${pages.length}`;
+  document.querySelectorAll(".item[data-page]").forEach((n) => n.classList.toggle("active", Number(n.dataset.page) === idx));
+}
+
+$("#pv-reload").onclick = loadGraph;
+$("#pv-open-tree").onclick = () => document.body.classList.toggle("show-tree");
+$("#pv-open-panel").onclick = () => document.body.classList.toggle("show-panel");
+$("#pv-backdrop").onclick = closeDrawers;
+window.addEventListener("focus", loadGraph);
+let lastWidth = innerWidth;
+window.addEventListener("resize", () => {
+  // Mobile browsers resize the height as the address bar hides; only refit on real width changes.
+  if (innerWidth !== lastWidth && $("#pv-wrap").style.display !== "none") fit(); else if (hlId) highlight(hlId);
+  lastWidth = innerWidth;
+  if (cur.pages) applyPageZoom();
+});
+loadGraph();
+</script>
+</body>
+</html>

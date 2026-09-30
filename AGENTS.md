@@ -10,6 +10,7 @@ This repo contains small, inspectable tools for preparing promo-material assets.
 - `tools/svg_editor/export_pdf.py` — multi-page vector PDF export from SVGs via Inkscape.
 - `tools/qr_generator/generate.py` — styled QR generation from YAML/JSON.
 - `tools/pipeline/run.py` — runs recipe YAMLs (ordered tool steps with inline configs).
+- `tools/pipeline/view.py` — local viewer for recipe outputs with asset highlighting.
 - `tools/qr_generator/configurator.py` — local HTML QR designer using the same renderer as the CLI.
 
 ## General workflow rules

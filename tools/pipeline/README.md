@@ -59,3 +59,50 @@ Use `recipe` steps for a project-level recipe that builds its parts in order.
   compositions/<name>/<name>.yaml + generated/
   generated/              project-level outputs (e.g. print PDF)
 ```
+
+## Viewer
+
+```bash
+python tools/pipeline/view.py path/to/project.yaml          # opens http://127.0.0.1:8766/
+python tools/pipeline/view.py path/to/project.yaml --port 9000 --no-browser
+python tools/pipeline/view.py path/to/project.yaml --host 0.0.0.0   # phones/tablets on the LAN or VPN
+```
+
+By default the server only listens on this machine. With `--host 0.0.0.0` it
+listens on every interface and prints a URL per address (LAN, VPN). Those URLs
+carry an access token: requests without it are refused, and the first visit
+sets a cookie so the page keeps working. The token is random per run; pass
+`--token VALUE` for a stable URL you can bookmark. Anyone with the URL can view
+the recipe's files while the server runs.
+
+On narrow screens the tree and details open as drawers (Recipes / Details),
+one finger pans, two fingers pinch-zoom, and tapping a Made-from entry
+highlights it (the › button opens its recipe).
+
+A local server that follows the recipe (and nested `recipe` steps).
+
+It opens on the project's **pages**, read like a PDF: every page stacked
+vertically with zoom (− / Fit width / +, Ctrl/⌘ + scroll, pinch on touch) and a
+page counter; the details panel lists the pages to jump between them. Pages are
+the inputs of the project's `export-pdf` step, in order; without one, each
+child recipe's final output is a page. Click a project header in the tree to
+return to its pages, or a page's Inspect button to open it on the canvas.
+
+Everything else is inspected on the canvas:
+
+- the recipe tree, grouped by project: recipe steps become section labels
+  (assets, compositions), recipes collapse to show their steps, and each tool
+  has a colour dot; click a recipe or step to display its output, or a gallery
+  when a step has many outputs (extract, vectorize)
+- generated SVGs loaded inline with wheel zoom and drag pan
+- **Made from**: the inputs behind the displayed output, each tagged with the
+  element ID it became (compose layer IDs, embed-images IDs, QR logo and
+  decoration IDs); hover to highlight it, click to open the recipe that made it
+- **Used by**: the steps that consume the displayed file
+- **Elements**: every ID in the SVG; hover to highlight, click to zoom to it.
+  Clicking in the SVG selects the innermost ID; click again to step outward.
+
+Inputs under another project's `<unit>/generated/` are followed to that unit's
+`<unit>.yaml`, so a flyer can link through to the QR project it uses. The page
+rescans when the window regains focus or on Reload, so rebuild with `run.py`
+and switch back. Only files referenced by the recipes are served.

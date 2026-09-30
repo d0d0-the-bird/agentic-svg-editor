@@ -60,6 +60,8 @@ Every SVG write produces an edited SVG, rendered PNG preview, and JSON edit log.
 
 Runs a recipe YAML: the ordered tool steps that build one asset or composition, with each tool's config inline. Keep one recipe per asset/composition folder and send all outputs to its `generated/` folder.
 
+`view.py` serves a local viewer: browse a recipe's outputs, and hover an input asset to highlight where it sits in the generated SVG.
+
 ### QR generator / designer
 `tools/qr_generator`
 
